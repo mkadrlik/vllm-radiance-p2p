@@ -7,8 +7,8 @@
 # ROCm 7.2.3, PyTorch 2.11+HIP — everything we need.
 #
 # Build:
-#   docker build -t ghcr.io/mkadrlik/vllm-rocm-tq:latest .
-#   # Gitea CI: docker build --build-arg REGISTRY=nas.kadrlik.home:3042 .
+#   docker build -t ghcr.io/[username]/vllm-rocm-tq:latest .
+#   # Gitea CI: docker build --build-arg REGISTRY=registry.example.com:5000 .
 ###############################################################################
 
 ARG REGISTRY=docker.io

@@ -1,9 +1,9 @@
-# vLLM-Radiance 27B Deployment (big-chungus)
+# vLLM-Radiance 27B Deployment (gpu-node)
 
 **Status:** LIVE · **Date:** 2026-08-08 · **Endpoint:** http://127.0.0.1:13313 (served as `vllm-27b`)
 **Model:** `nameistoken/Qwen3.6-27B-Quark-W8A8-INT8` (27B, W8A8 int8, GDN hybrid linear-attention)
 **Image:** `vllm-radiance:gfx1100` (source build, codeberg StillDeadcode/radiance v0.5.7, torch 2.11.0+rocm7.14, triton 3.6.0, aiter 0.1.17)
-**Compose:** `/home/mkadrlik/docker/lemonade-tq/docker-compose.tp2-27b-quark-radiance.yml`
+**Compose:** `/home/[username]/docker/lemonade-tq/docker-compose.tp2-27b-quark-radiance.yml`
 
 ## Performance
 | Config | Decode | Notes |

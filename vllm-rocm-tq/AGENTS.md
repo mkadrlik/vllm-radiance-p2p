@@ -36,12 +36,12 @@ GPU_ID=2 MODEL_NAME=<hf-model-id> docker compose up -d
 ## CI
 
 Gitea Actions workflow builds and pushes to both registries:
-- `nas.kadrlik.home:3042/mkadrlik/vllm-rocm-tq`
-- `ghcr.io/mkadrlik/vllm-rocm-tq`
+- `registry.example.com:5000/[username]/vllm-rocm-tq`
+- `ghcr.io/[username]/vllm-rocm-tq`
 
 Mirror pattern: Gitea primary, GitHub push-only (strip fetch refspec).
 
 ## Upstream
 
 Base image: `vllm/vllm-openai-rocm:v0.24.0`
-Upstream mirror: `mkadrlik/vllm-rocm` (Gitea, mirrors `github.com/vllm-project/vllm`)
+Upstream mirror: `[username]/vllm-rocm` (Gitea, mirrors `github.com/vllm-project/vllm`)

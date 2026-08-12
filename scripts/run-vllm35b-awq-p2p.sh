@@ -3,7 +3,7 @@
 # Uses the lemonade-tq image with host ROCm for working P2P on gfx1100.
 #
 # Model: sahilchachra/Qwen3.6-35B-A3B-uncensored-heretic-AWQ (21.8 GB, W4A16 compressed-tensors)
-# Image: ghcr.io/mkadrlik/lemonade-tq:latest (vLLM v0.1.dev1, host ROCm 7.14)
+# Image: ghcr.io/[username]/lemonade-tq:latest (vLLM v0.1.dev1, host ROCm 7.14)
 #   256 experts, 8 active/token (A3B = ~3B active)
 #
 # P2P: ENABLED — lemonade-tq image uses host ROCm 7.14 HIP runtime which

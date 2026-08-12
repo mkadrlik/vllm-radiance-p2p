@@ -1,6 +1,6 @@
 # vLLM + Radiance TP2 P2P on AMD RDNA3 (gfx1100)
 
-**Status:** Production · **Date:** 2026-08-11 · **Host:** big-chungus (TRX50 WS, 2× RX 7900 XTX gfx1100)
+**Status:** Production · **Date:** 2026-08-11 · **Host:** gpu-node (TRX50 WS, 2× RX 7900 XTX gfx1100)
 
 **Radiance:** [StillDeadcode/radiance](https://codeberg.org/StillDeadcode/radiance) v0.5.7 — custom vLLM fork with GDN hybrid linear-attention, MTP self-spec, dynamic draft, and ROCm-native TP2 P2P.
 

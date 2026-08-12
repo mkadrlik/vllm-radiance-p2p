@@ -8,7 +8,7 @@
 networks:
   backend:
     external: true
-  big-chungus-net:
+  backend-net:
     external: true
 
 services:
@@ -24,7 +24,7 @@ services:
       - seccomp=unconfined
     networks:
       - backend
-      - big-chungus-net
+      - backend-net
     ports:
       - "13313:13313"
     command:
@@ -55,7 +55,7 @@ services:
       - --port=13313
     environment:
       HIP_VISIBLE_DEVICES: "0,1"
-      TZ: America/Chicago
+      TZ: UTC
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"

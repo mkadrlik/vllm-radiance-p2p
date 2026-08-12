@@ -3,7 +3,7 @@ name: vllm-rocm-main
 networks:
   backend:
     external: true
-  big-chungus-net:
+  gpu-node-net:
     external: true
 
 services:
@@ -29,11 +29,11 @@ services:
     privileged: true
     networks:
       - backend
-      - big-chungus-net
+      - gpu-node-net
     ports:
       - "13313:13313"
     environment:
-      TZ: America/Chicago
+      TZ: UTC
       HSA_OVERRIDE_GFX_VERSION: "11.0.0"
       HSA_SIGNAL_TIMEOUT: "-1"
       AMDGPU_GPU_RECOVERY: "1"
@@ -84,7 +84,7 @@ services:
       - --safetensors-load-strategy
       - lazy
     volumes:
-      - /home/mkadrlik/docker/lemonade-tq/data/cache:/root/.cache/huggingface:ro
+      - /home/[username]/docker/lemonade-tq/data/cache:/root/.cache/huggingface:ro
       - ./data/triton-cache:/root/.triton:rw
       - ./data/vllm-cache:/root/.cache/vllm:rw
     group_add:

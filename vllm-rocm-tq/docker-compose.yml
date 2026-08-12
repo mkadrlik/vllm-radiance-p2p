@@ -17,14 +17,14 @@
 #     SERVED_MODEL_NAME=Ornith-1.0-9B MAX_MODEL_LEN=32768 docker compose up -d
 ################################################################################
 networks:
-  big-chungus-net:
+  gpu-node-net:
     external: true
   backend:
     driver: bridge
 
 services:
   vllm-rocm-tq:
-    image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-rocm-tq:latest}
+    image: ${VLLM_TQ_IMAGE:-ghcr.io/[username]/vllm-rocm-tq:latest}
     restart: unless-stopped
     ipc: shareable
     container_name: vllm-rocm-tq
@@ -38,7 +38,7 @@ services:
 
     networks:
       - backend
-      - big-chungus-net
+      - gpu-node-net
 
     ports:
       - "${VLLM_HOST_PORT:-13309}:${VLLM_PORT:-8001}"
@@ -50,7 +50,7 @@ services:
       # Host ROCm libs require GLIBCXX_3.4.32 which the container doesn't have.
 
     environment:
-      TZ: America/Chicago
+      TZ: UTC
       # GPU selection — ROCR_VISIBLE_DEVICES set in entrypoint (avoids HIP/CUDA sync)
       GPU_ID: "${GPU_ID:-0}"
       HSA_OVERRIDE_GFX_VERSION: "11.0.0"
