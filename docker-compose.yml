@@ -1,9 +1,10 @@
 # vLLM inference on AMD RDNA3 (gfx1100)
 #
-# Profiles (one at a time — all share port 13313):
-#   radiance-27b   Qwen3.6-27B-Quark-W8A8 (Radiance fork, TP2)
-#   radiance-35b   Qwen3.6-35B-A3B-Quark-W8A8 (Radiance fork, TP2)
-#   awq            AWQ models via vllm-rocm-tq (single GPU, :13309)
+# One profile at a time — all share port 13313 (radiance) or 13309 (awq).
+#
+#   radiance-27b   Qwen3.6-27B-Quark-W8A8  (tensor-parallel 2, :13313)
+#   radiance-35b   Qwen3.6-35B-A3B-Quark    (tensor-parallel 2, :13313)
+#   awq            AWQ models via vllm (single GPU, :13309)
 #
 # Usage:
 #   docker compose --profile radiance-27b up -d
@@ -17,7 +18,7 @@ networks:
     driver: bridge
 
 services:
-  # ── Radiance 27B Quark ───────────────────────────────────────────────
+  # ── Radiance 27B Quark ──────────────────────────────────────────────────
   vllm-27b-quark:
     profiles: ["radiance-27b"]
     build:
@@ -108,7 +109,7 @@ services:
         max-file: "2"
         tag: vllm-27b-quark
 
-  # ── Radiance 35B-A3B Quark ──────────────────────────────────────────
+  # ── Radiance 35B-A3B Quark ──────────────────────────────────────────────
   vllm-35b-quark:
     profiles: ["radiance-35b"]
     build:
@@ -199,14 +200,14 @@ services:
         max-file: "2"
         tag: vllm-35b-quark
 
-  # ── AWQ (vllm-rocm-tq) ──────────────────────────────────────────────
-  vllm-rocm-tq:
+  # ── AWQ (single GPU) ────────────────────────────────────────────────────
+  awq:
     profiles: ["awq"]
     build:
-      context: ./vllm-rocm-tq
+      context: ./awq
       dockerfile: Dockerfile
-    image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-rocm-tq:latest}
-    container_name: vllm-rocm-tq
+    image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-awq:latest}
+    container_name: vllm-awq
     restart: unless-stopped
     ipc: shareable
     security_opt:
@@ -219,12 +220,29 @@ services:
     ports:
       - "${VLLM_HOST_PORT:-13309}:${VLLM_PORT:-8001}"
     volumes:
-      - ./vllm-rocm-tq/data/hf-cache:/root/.cache/huggingface
-      - ./vllm-rocm-tq/data/triton-cache:/root/.triton:rw
+      - ./awq/data/hf-cache:/root/.cache/huggingface
+      - ./awq/data/triton-cache:/root/.triton:rw
+    command: >
+      python3 -m vllm.entrypoints.openai.api_server
+      --model ${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
+      --port ${VLLM_PORT:-8001}
+      --host 0.0.0.0
+      --served-model-name ${SERVED_MODEL_NAME:-Qwen2.5-0.5B-Instruct}
+      --tensor-parallel-size ${TENSOR_PARALLEL_SIZE:-1}
+      --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.85}
+      --max-model-len ${MAX_MODEL_LEN:-32768}
+      --quantization ${QUANTIZATION:-awq}
+      --trust-remote-code
+      --enforce-eager
+      --disable-log-stats
+      ${VLLM_EXTRA_ARGS:-}
     environment:
       TZ: UTC
       GPU_ID: "${GPU_ID:-0}"
+      ROCR_VISIBLE_DEVICES: "${GPU_ID:-0}"
       HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HSA_SIGNAL_TIMEOUT: "-1"
+      AMDGPU_GPU_RECOVERY: "1"
       MODEL_NAME: "${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}"
       SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-}"
       QUANTIZATION: "${QUANTIZATION:-awq}"
@@ -234,8 +252,6 @@ services:
       VLLM_EXTRA_ARGS: "${VLLM_EXTRA_ARGS:-}"
       VLLM_PORT: "${VLLM_PORT:-8001}"
       HF_TOKEN: "${HF_TOKEN:-}"
-      HSA_SIGNAL_TIMEOUT: "-1"
-      AMDGPU_GPU_RECOVERY: "1"
     group_add:
       - video
       - render
@@ -250,4 +266,4 @@ services:
       options:
         max-size: "10m"
         max-file: "2"
-        tag: vllm-rocm-tq
+        tag: vllm-awq
