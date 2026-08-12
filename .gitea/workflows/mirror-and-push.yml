@@ -64,6 +64,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GH_TOKEN }}
 
+      - name: Pre-pull base image
+        run: docker pull stilldeadcode/vllm-radiance:0.5.7
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
