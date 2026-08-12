@@ -51,14 +51,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_TOKEN }}
           fetch-depth: 0
 
       - name: Configure git credentials
         run: |
           git config --global user.name "Gitea Actions"
           git config --global user.email "actions@gitea.local"
-          git config --global url."http://${{ secrets.GITEA_TOKEN_MK }}@192.168.50.11:3042/".insteadOf "http://192.168.50.11:3042/"
+          git config --global url."http://${{ secrets.CR_RUNNER_TOKEN }}@192.168.50.11:3042/".insteadOf "http://192.168.50.11:3042/"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
