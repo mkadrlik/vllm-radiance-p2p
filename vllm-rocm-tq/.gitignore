@@ -1,0 +1,7 @@
+# Data directories (model cache, Triton JIT cache)
+data/
+
+# Git
+*.swp
+*.swo
+*~

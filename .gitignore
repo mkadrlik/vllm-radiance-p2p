@@ -1,0 +1,18 @@
+# Compile caches (GPU-specific, large, regenerated on boot)
+data/radiance-cache-*/
+
+# HuggingFace cache
+data/cache/
+
+# Triton/Inductor cache
+*.json
+.triton/
+inductor/
+
+# Docker build artifacts
+*.log
+builds/
+
+# OS files
+.DS_Store
+Thumbs.db

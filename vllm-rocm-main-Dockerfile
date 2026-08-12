@@ -1,0 +1,90 @@
+# syntax=docker/dockerfile:1
+# Pinned upstream-source candidate: PyTorch + vLLM on ROCm gfx1100.
+ARG ROCM_BASE=rocm/dev-ubuntu-24.04:7.14.0-full@sha256:439edaa8f0c4be4a3728e528f87b8a2ea1f051f34cf10b27caa4bd94f562eda7
+ARG TORCH_COMMIT=cf30153c4c131c8164ee7798e5022d810682e2cb
+ARG VLLM_COMMIT=d4da0c55af3aa231b6209bf77871f3ed36eab0d2
+
+FROM ${ROCM_BASE} AS build
+ARG TORCH_COMMIT
+ARG VLLM_COMMIT
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTORCH_ROCM_ARCH=gfx1100 \
+    MAX_JOBS=8 \
+    CMAKE_BUILD_PARALLEL_LEVEL=8 \
+    USE_ROCM=1 \
+    USE_CUDA=0 \
+    BUILD_TEST=0 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates python3 python3-dev python3-venv python3-pip \
+      build-essential cmake ninja-build pkg-config curl libnuma-dev \
+      libopenblas-dev libssl-dev libffi-dev libdrm-dev liblzma-dev && \
+    python3 -m venv "${VIRTUAL_ENV}" && \
+    python -m pip install --upgrade pip setuptools wheel && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --filter=blob:none https://github.com/pytorch/pytorch.git torch && \
+    cd torch && git checkout --detach "${TORCH_COMMIT}" && \
+    git submodule update --init --recursive
+RUN cd /src/torch && \
+    python -m pip install -r requirements.txt && \
+    python tools/amd_build/build_amd.py && \
+    CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" python setup.py bdist_wheel --dist-dir /tmp/torch-wheel && \
+    python -m pip install /tmp/torch-wheel/torch-*.whl
+
+RUN git clone --filter=blob:none https://github.com/vllm-project/vllm.git vllm && \
+    cd vllm && git checkout --detach "${VLLM_COMMIT}"
+RUN cd /src/vllm && \
+    python -m pip install -r requirements/build/rocm.txt && \
+    VLLM_TARGET_DEVICE=rocm python -m pip wheel --no-build-isolation --no-deps . -w /tmp/vllm-wheel && \
+    python -m pip install /tmp/vllm-wheel/vllm-*.whl && \
+    python - <<'PY'
+# Upstream bug d4da0c5 (main): _needs_intermediate_size_param lists only the
+# base CompressedTensorsWNA16MoEMethod, but ROCm/gfx1100 selects the RDNA3
+# subclass CompressedTensorsWNA16RDNA3MoEMethod, whose inherited create_weights
+# pops intermediate_size_full unconditionally -> KeyError at layer init.
+# Add the RDNA3 class to the guard tuple.
+from pathlib import Path
+p = Path("/opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/routed_experts.py")
+src = p.read_text()
+old = '            "CompressedTensorsWNA16MoEMethod",\n            "CompressedTensorsW4A16FlydslMoEMethod",'
+new = '            "CompressedTensorsWNA16MoEMethod",\n            "CompressedTensorsWNA16RDNA3MoEMethod",\n            "CompressedTensorsW4A16FlydslMoEMethod",'
+assert old in src, "anchor not found"
+p.write_text(src.replace(old, new))
+print("patched routed_experts.py: RDNA3 MoE method in _needs_intermediate_size_param")
+PY
+
+# Keep only the virtualenv handoff; source trees and build artifacts never enter runtime.
+RUN rm -rf /src /tmp/torch-wheel /tmp/vllm-wheel /root/.cache/pip
+
+FROM ${ROCM_BASE} AS runtime
+ARG TORCH_COMMIT
+ARG VLLM_COMMIT
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTORCH_ROCM_ARCH=gfx1100 \
+    HSA_OVERRIDE_GFX_VERSION=11.0.0 \
+    HSA_SIGNAL_TIMEOUT=-1 \
+    AMDGPU_GPU_RECOVERY=1 \
+    FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
+    HF_HOME=/root/.cache/huggingface \
+    TRITON_CACHE_DIR=/root/.triton \
+    VLLM_CACHE_ROOT=/root/.cache/vllm \
+    PIP_NO_CACHE_DIR=1
+
+# Runtime has Python/curl only; no source tree, git, compiler, build system, or headers.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-dev ca-certificates curl libnuma1 libopenblas0 gcc g++ && \
+    apt-get purge -y --auto-remove build-essential make cmake ninja-build git pkg-config libssl-dev libffi-dev libopenblas-dev 2>/dev/null || true && \
+    rm -rf /var/lib/apt/lists/* /usr/src/* /root/.cache
+COPY --from=build /opt/venv /opt/venv
+
+RUN mkdir -p /root/.triton /root/.cache/vllm /root/.cache/huggingface && \
+    python -c 'import torch, vllm; print(torch.__version__); print(vllm.__version__)'
+WORKDIR /app
+EXPOSE 13315
+ENTRYPOINT ["python", "-m", "vllm.entrypoints.openai.api_server"]
