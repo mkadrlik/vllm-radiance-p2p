@@ -23,13 +23,9 @@ jobs:
           git config user.name "Gitea Actions"
           git config user.email "actions@gitea.local"
 
-      # TODO: GITHUB_TOKEN is injected by Gitea Actions runner, not hardcoded here.
-      # The `***` is Gitea's display redaction of `${{ secrets.GITHUB_TOKEN }}`.
-      # When Gitea secrets API supports encrypted values properly, this will be
-      # a real secret reference. For now, the token is set manually via Gitea admin UI.
       - name: Add GitHub remote
         run: |
-          git remote add github https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository_owner }}/vllm-radiance-p2p.git
+          git remote add github https://${{ vars.GH_TOKEN }}@github.com/${{ github.repository_owner }}/vllm-radiance-p2p.git
 
       - name: Mirror to GitHub (excluding .gitea folder)
         run: |
@@ -57,7 +53,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ vars.GH_TOKEN }}
 
       - name: Extract metadata
         id: meta
