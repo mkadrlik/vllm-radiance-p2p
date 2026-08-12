@@ -2,7 +2,7 @@ name: Mirror to GitHub and Push to ghcr.io
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
