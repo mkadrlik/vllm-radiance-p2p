@@ -53,16 +53,19 @@ find <cache> -name '*.json' -size 0 -delete
 
 ## Deployment Patterns
 
-### Radiance Image (27B Quark)
+### Radiance Image (27B/35B Quark)
 - Source build from StillDeadcode/radiance v0.5.7
 - gfx1100-specific GEMM tuning baked in
 - AITER GEMM (linear) via Triton gemm_a8w8
 - FP8 paths OFF (RDNA3 has no native FP8)
 
-### lemonade-tq Image (35B-A3B AWQ)
-- vLLM v0.1.dev1+gf2069b005.rocm724
-- Host ROCm 7.14 — handles hipIpcGetMemHandle correctly
-- Stock images have P2P regression on gfx1100
+### AWQ Image
+- vllm/vllm-openai-rocm:v0.24.0 base
+- Single GPU, no TP2
+
+## 27B vs 35B Gotcha
+
+The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len=65537`. **Do not set 65k on 35B** — it OOMs at TP2. The 35B-A3B is a larger model; 32k is the stable ceiling. Both share identical build context, Dockerfile, env vars, and all other arguments.
 
 ## Common Pitfalls
 
@@ -79,19 +82,6 @@ find <cache> -name '*.json' -size 0 -delete
 | 27B Quark (CUDA-graph) | 21.9 tok/s | MTP off, 128-token cap |
 | 35B-A3B AWQ (eager) | 27.4 tok/s | TP2 P2P enabled |
 | Prior lemonade stack | 16.5 tok/s | baseline |
-
-## Git Structure
-
-```
-vllm-radiance-p2p/
-├── README.md              # Deployment guide
-├── AGENTS.md              # This file (engineering notes)
-├── compose/               # Docker Compose files
-├── scripts/               # Entry points and monitors
-├── data/                  # Compile caches (gitignored)
-├── results/               # Benchmark data
-└── docs/                  # Additional documentation
-```
 
 ## Upstream Links
 

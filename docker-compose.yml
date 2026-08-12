@@ -19,17 +19,17 @@ networks:
 
 services:
   # ── Radiance 27B Quark ──────────────────────────────────────────────────
-  vllm-27b-quark:
+  qwen-27b:
     profiles: ["radiance-27b"]
     build:
       context: .
       dockerfile: Dockerfile
     image: vllm-radiance:gfx1100
-    container_name: vllm-27b-quark
+    container_name: qwen-27b
     restart: unless-stopped
     user: root
     ipc: host
-    shm_size: 16G
+    shm_size: ${VLLM_SHM_SIZE:-16G}
     privileged: true
     security_opt:
       - seccomp=unconfined
@@ -40,16 +40,16 @@ services:
       - backend
       - backend-net
     ports:
-      - "13313:13313"
+      - "${VLLM_HOST_PORT:-13313}:13313"
     command:
       - "nameistoken/Qwen3.6-27B-Quark-W8A8-INT8"
-      - --served-model-name=vllm-27b
+      - --served-model-name=qwen-27b
       - --quantization=quark
-      - --tensor-parallel-size=2
-      - --gpu-memory-utilization=0.85
-      - --max-model-len=65537
-      - --max-num-batched-tokens=2048
-      - --max-num-seqs=64
+      - --tensor-parallel-size=${TENSOR_PARALLEL_SIZE:-2}
+      - --gpu-memory-utilization=${VLLM_27B_GPU_MEM_UTIL:-0.85}
+      - --max-model-len=${VLLM_27B_MAX_MODEL_LEN:-65537}
+      - --max-num-batched-tokens=${VLLM_BATCH_TOKENS:-2048}
+      - --max-num-seqs=${VLLM_MAX_SEQS:-64}
       - --dtype=bfloat16
       - --attention-backend=ROCM_ATTN
       - --enable-prefix-caching
@@ -63,7 +63,7 @@ services:
       - --host=0.0.0.0
       - --port=13313
     environment:
-      HIP_VISIBLE_DEVICES: "0,1"
+      HIP_VISIBLE_DEVICES: "${HIP_VISIBLE_DEVICES:-0,1}"
       TZ: UTC
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: "1"
@@ -88,7 +88,7 @@ services:
       RADIANCE_VIT_FLASH: "0"
       NCCL_PROTO: Simple
       GPU_MAX_HW_QUEUES: "1"
-      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      TORCHINDUCTOR_COMPILE_THREADS: "${TORCHINDUCTOR_COMPILE_THREADS:-4}"
       VLLM_CACHE_ROOT: /cache/vllm
       TORCHINDUCTOR_CACHE_DIR: /cache/inductor
       TRITON_CACHE_DIR: /cache/triton
@@ -100,27 +100,27 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:13313/health"]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 1800s
+      retries: ${VLLM_HEALTH_RETRIES:-10}
+      start_period: ${VLLM_START_PERIOD:-1800}s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "2"
-        tag: vllm-27b-quark
+        tag: qwen-27b
 
   # ── Radiance 35B-A3B Quark ──────────────────────────────────────────────
-  vllm-35b-quark:
+  qwen-35b:
     profiles: ["radiance-35b"]
     build:
       context: .
       dockerfile: Dockerfile
     image: vllm-radiance:gfx1100
-    container_name: vllm-35b-quark
+    container_name: qwen-35b
     restart: unless-stopped
     user: root
     ipc: host
-    shm_size: 16G
+    shm_size: ${VLLM_SHM_SIZE:-16G}
     privileged: true
     security_opt:
       - seccomp=unconfined
@@ -131,16 +131,16 @@ services:
       - backend
       - backend-net
     ports:
-      - "13313:13313"
+      - "${VLLM_HOST_PORT:-13313}:13313"
     command:
       - "nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8"
-      - --served-model-name=vllm-35b
+      - --served-model-name=qwen-35b
       - --quantization=quark
-      - --tensor-parallel-size=2
-      - --gpu-memory-utilization=0.85
-      - --max-model-len=32768
-      - --max-num-batched-tokens=2048
-      - --max-num-seqs=64
+      - --tensor-parallel-size=${TENSOR_PARALLEL_SIZE:-2}
+      - --gpu-memory-utilization=${VLLM_35B_GPU_MEM_UTIL:-0.85}
+      - --max-model-len=${VLLM_35B_MAX_MODEL_LEN:-32768}
+      - --max-num-batched-tokens=${VLLM_BATCH_TOKENS:-2048}
+      - --max-num-seqs=${VLLM_MAX_SEQS:-64}
       - --dtype=bfloat16
       - --attention-backend=ROCM_ATTN
       - --enable-prefix-caching
@@ -154,7 +154,7 @@ services:
       - --host=0.0.0.0
       - --port=13313
     environment:
-      HIP_VISIBLE_DEVICES: "0,1"
+      HIP_VISIBLE_DEVICES: "${HIP_VISIBLE_DEVICES:-0,1}"
       TZ: UTC
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: "1"
@@ -179,7 +179,7 @@ services:
       RADIANCE_VIT_FLASH: "0"
       NCCL_PROTO: Simple
       GPU_MAX_HW_QUEUES: "1"
-      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      TORCHINDUCTOR_COMPILE_THREADS: "${TORCHINDUCTOR_COMPILE_THREADS:-4}"
       VLLM_CACHE_ROOT: /cache/vllm
       TORCHINDUCTOR_CACHE_DIR: /cache/inductor
       TRITON_CACHE_DIR: /cache/triton
@@ -191,14 +191,14 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:13313/health"]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 1800s
+      retries: ${VLLM_HEALTH_RETRIES:-10}
+      start_period: ${VLLM_START_PERIOD:-1800}s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "2"
-        tag: vllm-35b-quark
+        tag: qwen-35b
 
   # ── AWQ (single GPU) ────────────────────────────────────────────────────
   awq:
@@ -218,16 +218,16 @@ services:
     networks:
       - backend
     ports:
-      - "${VLLM_HOST_PORT:-13309}:${VLLM_PORT:-8001}"
+      - "${AWQ_HOST_PORT:-13309}:${AWQ_CONTAINER_PORT:-8001}"
     volumes:
       - ./data/awq-hf:/root/.cache/huggingface
       - ./data/awq-triton:/root/.triton:rw
     command: >
       python3 -m vllm.entrypoints.openai.api_server
-      --model ${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
-      --port ${VLLM_PORT:-8001}
+      --model ${AWQ_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
+      --port ${AWQ_CONTAINER_PORT:-8001}
       --host 0.0.0.0
-      --served-model-name ${SERVED_MODEL_NAME:-Qwen2.5-0.5B-Instruct}
+      --served-model-name ${AWQ_SERVED_MODEL_NAME:-Qwen2.5-0.5B-Instruct}
       --tensor-parallel-size ${TENSOR_PARALLEL_SIZE:-1}
       --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.85}
       --max-model-len ${MAX_MODEL_LEN:-32768}
@@ -238,25 +238,25 @@ services:
       ${VLLM_EXTRA_ARGS:-}
     environment:
       TZ: UTC
-      GPU_ID: "${GPU_ID:-0}"
-      ROCR_VISIBLE_DEVICES: "${GPU_ID:-0}"
-      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
-      HSA_SIGNAL_TIMEOUT: "-1"
-      AMDGPU_GPU_RECOVERY: "1"
-      MODEL_NAME: "${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}"
-      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-}"
+      GPU_ID: "${AWQ_GPU_ID:-0}"
+      ROCR_VISIBLE_DEVICES: "${AWQ_GPU_ID:-0}"
+      HSA_OVERRIDE_GFX_VERSION: "${HSA_OVERRIDE_GFX_VERSION:-11.0.0}"
+      HSA_SIGNAL_TIMEOUT: "${HSA_SIGNAL_TIMEOUT:--1}"
+      AMDGPU_GPU_RECOVERY: "${AMDGPU_GPU_RECOVERY:-1}"
+      MODEL_NAME: "${AWQ_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}"
+      SERVED_MODEL_NAME: "${AWQ_SERVED_MODEL_NAME:-}"
       QUANTIZATION: "${QUANTIZATION:-awq}"
       MAX_MODEL_LEN: "${MAX_MODEL_LEN:-32768}"
       GPU_MEMORY_UTILIZATION: "${GPU_MEMORY_UTILIZATION:-0.85}"
       TENSOR_PARALLEL_SIZE: "${TENSOR_PARALLEL_SIZE:-1}"
       VLLM_EXTRA_ARGS: "${VLLM_EXTRA_ARGS:-}"
-      VLLM_PORT: "${VLLM_PORT:-8001}"
+      VLLM_PORT: "${AWQ_CONTAINER_PORT:-8001}"
       HF_TOKEN: "${HF_TOKEN:-}"
     group_add:
       - video
       - render
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8001}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${AWQ_CONTAINER_PORT:-8001}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
