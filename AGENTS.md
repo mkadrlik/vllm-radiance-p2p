@@ -93,6 +93,10 @@ vllm-radiance-p2p/
 └── docs/                  # Additional documentation
 ```
 
+## Tech Debt
+
+- [ ] **Gitea Actions secrets not externalized** — GITHUB_TOKEN must be injected via Gitea secret store, not hardcoded. When Gitea secrets API supports encrypted values properly, the TODO in `.gitea/workflows/mirror-and-push.yml` can be resolved.
+
 ## Upstream Links
 
 - Radiance: https://codeberg.org/StillDeadcode/radiance
