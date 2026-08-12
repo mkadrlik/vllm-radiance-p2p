@@ -29,15 +29,14 @@ First boot takes 7-15 minutes (compilation). Subsequent boots use cached `./data
 ```
 .
 ├── docker-compose.yml      # All profiles in one file
-├── Dockerfile              # Radiance build (used by radiance-27b/35b)
+├── Dockerfile              # Radiance build (radiance-27b/35b)
+├── Dockerfile.awq          # AWQ build (awq profile)
 ├── .env.example            # Copy to .env and fill in HF_TOKEN
-├── awq/                    # AWQ profile build context
-│   ├── Dockerfile
-│   └── data/               # Caches (gitignored)
-├── data/                   # Radiance caches (gitignored)
-│   ├── cache/
-│   ├── radiance-cache-27b-quark/
-│   └── radiance-cache-35b-a3b-quark/
+├── data/                   # All caches (gitignored)
+│   ├── cache/              # Radiance HF cache
+│   ├── radiance-cache-*/   # Radiance compile caches
+│   ├── awq-hf/             # AWQ HF cache
+│   └── awq-triton/         # AWQ Triton cache
 ├── scripts/                # Helper scripts (optional)
 │   └── radiance_build_state.sh
 ├── AGENTS.md               # Engineering notes (not needed to run)
