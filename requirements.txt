@@ -1,5 +1,0 @@
-# Radiance fork from Codeberg
-git+https://codeberg.org/StillDeadcode/vllm-radiance.git@v0.5.7
-
-# vLLM for ROCm
-vllm

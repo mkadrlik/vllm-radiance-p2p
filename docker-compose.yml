@@ -1,0 +1,253 @@
+# vLLM inference on AMD RDNA3 (gfx1100)
+#
+# Profiles (one at a time — all share port 13313):
+#   radiance-27b   Qwen3.6-27B-Quark-W8A8 (Radiance fork, TP2)
+#   radiance-35b   Qwen3.6-35B-A3B-Quark-W8A8 (Radiance fork, TP2)
+#   awq            AWQ models via vllm-rocm-tq (single GPU, :13309)
+#
+# Usage:
+#   docker compose --profile radiance-27b up -d
+#   docker compose --profile radiance-35b up -d
+#   docker compose --profile awq up -d
+
+networks:
+  backend:
+    driver: bridge
+  backend-net:
+    driver: bridge
+
+services:
+  # ── Radiance 27B Quark ───────────────────────────────────────────────
+  vllm-27b-quark:
+    profiles: ["radiance-27b"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vllm-radiance:gfx1100
+    container_name: vllm-27b-quark
+    restart: unless-stopped
+    user: root
+    ipc: host
+    shm_size: 16G
+    privileged: true
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    networks:
+      - backend
+      - backend-net
+    ports:
+      - "13313:13313"
+    command:
+      - "nameistoken/Qwen3.6-27B-Quark-W8A8-INT8"
+      - --served-model-name=vllm-27b
+      - --quantization=quark
+      - --tensor-parallel-size=2
+      - --gpu-memory-utilization=0.85
+      - --max-model-len=65537
+      - --max-num-batched-tokens=2048
+      - --max-num-seqs=64
+      - --dtype=bfloat16
+      - --attention-backend=ROCM_ATTN
+      - --enable-prefix-caching
+      - '--compilation-config={"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128],"max_cudagraph_capture_size":128}'
+      - --no-async-scheduling
+      - --enable-auto-tool-choice
+      - --tool-call-parser=qwen3_xml
+      - --reasoning-parser=qwen3
+      - --language-model-only
+      - --trust-remote-code
+      - --host=0.0.0.0
+      - --port=13313
+    environment:
+      HIP_VISIBLE_DEVICES: "0,1"
+      TZ: UTC
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_ROCM_USE_AITER: "1"
+      VLLM_ROCM_USE_AITER_LINEAR: "1"
+      VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION: "0"
+      VLLM_ROCM_USE_AITER_MHA: "0"
+      VLLM_ROCM_USE_AITER_MLA: "0"
+      VLLM_ROCM_USE_AITER_MOE: "0"
+      VLLM_ROCM_USE_AITER_FP8BMM: "0"
+      VLLM_ROCM_USE_AITER_RMSNORM: "0"
+      RADIANCE_GDN_WMMA: "0"
+      RADIANCE_MOE_ROUTER: "1"
+      RADIANCE_DYNAMIC_DRAFT: "1"
+      RADIANCE_FAST_REDUCE: "0"
+      RADIANCE_RUN_BWTEST: "0"
+      RADIANCE_AR_QUANT: "0"
+      RADIANCE_PRESHUFFLE: "0"
+      RADIANCE_FUSE_RMS_QUANT: "0"
+      RADIANCE_VIT_FLASH: "0"
+      NCCL_PROTO: Simple
+      GPU_MAX_HW_QUEUES: "1"
+      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      VLLM_CACHE_ROOT: /cache/vllm
+      TORCHINDUCTOR_CACHE_DIR: /cache/inductor
+      TRITON_CACHE_DIR: /cache/triton
+      AITER_ROOT_DIR: /cache/aiter
+    volumes:
+      - ./data/cache:/root/.cache/huggingface:rw
+      - ./data/radiance-cache-27b-quark:/cache:rw
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:13313/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 1800s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+        tag: vllm-27b-quark
+
+  # ── Radiance 35B-A3B Quark ──────────────────────────────────────────
+  vllm-35b-quark:
+    profiles: ["radiance-35b"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vllm-radiance:gfx1100
+    container_name: vllm-35b-quark
+    restart: unless-stopped
+    user: root
+    ipc: host
+    shm_size: 16G
+    privileged: true
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    networks:
+      - backend
+      - backend-net
+    ports:
+      - "13313:13313"
+    command:
+      - "nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8"
+      - --served-model-name=vllm-35b
+      - --quantization=quark
+      - --tensor-parallel-size=2
+      - --gpu-memory-utilization=0.85
+      - --max-model-len=32768
+      - --max-num-batched-tokens=2048
+      - --max-num-seqs=64
+      - --dtype=bfloat16
+      - --attention-backend=ROCM_ATTN
+      - --enable-prefix-caching
+      - '--compilation-config={"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128],"max_cudagraph_capture_size":128}'
+      - --no-async-scheduling
+      - --enable-auto-tool-choice
+      - --tool-call-parser=qwen3_xml
+      - --reasoning-parser=qwen3
+      - --language-model-only
+      - --trust-remote-code
+      - --host=0.0.0.0
+      - --port=13313
+    environment:
+      HIP_VISIBLE_DEVICES: "0,1"
+      TZ: UTC
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_ROCM_USE_AITER: "1"
+      VLLM_ROCM_USE_AITER_LINEAR: "1"
+      VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION: "0"
+      VLLM_ROCM_USE_AITER_MHA: "0"
+      VLLM_ROCM_USE_AITER_MLA: "0"
+      VLLM_ROCM_USE_AITER_MOE: "0"
+      VLLM_ROCM_USE_AITER_FP8BMM: "0"
+      VLLM_ROCM_USE_AITER_RMSNORM: "0"
+      RADIANCE_GDN_WMMA: "0"
+      RADIANCE_MOE_ROUTER: "1"
+      RADIANCE_DYNAMIC_DRAFT: "1"
+      RADIANCE_FAST_REDUCE: "0"
+      RADIANCE_RUN_BWTEST: "0"
+      RADIANCE_AR_QUANT: "0"
+      RADIANCE_PRESHUFFLE: "0"
+      RADIANCE_FUSE_RMS_QUANT: "0"
+      RADIANCE_VIT_FLASH: "0"
+      NCCL_PROTO: Simple
+      GPU_MAX_HW_QUEUES: "1"
+      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      VLLM_CACHE_ROOT: /cache/vllm
+      TORCHINDUCTOR_CACHE_DIR: /cache/inductor
+      TRITON_CACHE_DIR: /cache/triton
+      AITER_ROOT_DIR: /cache/aiter
+    volumes:
+      - ./data/cache:/root/.cache/huggingface:rw
+      - ./data/radiance-cache-35b-a3b-quark:/cache:rw
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:13313/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 1800s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+        tag: vllm-35b-quark
+
+  # ── AWQ (vllm-rocm-tq) ──────────────────────────────────────────────
+  vllm-rocm-tq:
+    profiles: ["awq"]
+    build:
+      context: ./vllm-rocm-tq
+      dockerfile: Dockerfile
+    image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-rocm-tq:latest}
+    container_name: vllm-rocm-tq
+    restart: unless-stopped
+    ipc: shareable
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    networks:
+      - backend
+    ports:
+      - "${VLLM_HOST_PORT:-13309}:${VLLM_PORT:-8001}"
+    volumes:
+      - ./vllm-rocm-tq/data/hf-cache:/root/.cache/huggingface
+      - ./vllm-rocm-tq/data/triton-cache:/root/.triton:rw
+    environment:
+      TZ: UTC
+      GPU_ID: "${GPU_ID:-0}"
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      MODEL_NAME: "${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}"
+      SERVED_MODEL_NAME: "${SERVED_MODEL_NAME:-}"
+      QUANTIZATION: "${QUANTIZATION:-awq}"
+      MAX_MODEL_LEN: "${MAX_MODEL_LEN:-32768}"
+      GPU_MEMORY_UTILIZATION: "${GPU_MEMORY_UTILIZATION:-0.85}"
+      TENSOR_PARALLEL_SIZE: "${TENSOR_PARALLEL_SIZE:-1}"
+      VLLM_EXTRA_ARGS: "${VLLM_EXTRA_ARGS:-}"
+      VLLM_PORT: "${VLLM_PORT:-8001}"
+      HF_TOKEN: "${HF_TOKEN:-}"
+      HSA_SIGNAL_TIMEOUT: "-1"
+      AMDGPU_GPU_RECOVERY: "1"
+    group_add:
+      - video
+      - render
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8001}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+        tag: vllm-rocm-tq
