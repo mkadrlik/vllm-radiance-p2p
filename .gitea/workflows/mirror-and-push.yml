@@ -22,8 +22,6 @@ jobs:
         run: |
           git config --global user.name "Gitea Actions"
           git config --global user.email "actions@gitea.local"
-          # Disable credential helpers so git uses inline token in URL
-          git config --global --unset credential.helper 2>/dev/null || true
 
       - name: Ensure GitHub repo exists
         run: |
@@ -42,9 +40,9 @@ jobs:
         run: |
           # Delete .gitea folder from git history before pushing
           git filter-branch -f --prune-empty --index-filter 'git rm -rf --cached --ignore-unmatch .gitea' HEAD 2>/dev/null || true
-          # Push all refs to GitHub
-          git push github --force --all
-          git push github --force --tags
+          # Push all refs to GitHub -- use GIT_TERMINAL_PROMPT=0 to prevent credential helper prompting
+          GIT_TERMINAL_PROMPT=0 git push github --force --all
+          GIT_TERMINAL_PROMPT=0 git push github --force --tags
 
   build-and-push:
     runs-on: [self-hosted, linux, amd64]
