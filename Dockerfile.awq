@@ -8,7 +8,7 @@
 #
 # Build:
 #   docker build -t ghcr.io/[username]/vllm-awq:latest .
-#   # Gitea CI: docker build --build-arg REGISTRY=registry.example.com:5000 .
+#   # CI: docker build --build-arg REGISTRY=registry.example.com:5000 .
 ###############################################################################
 
 ARG REGISTRY=docker.io

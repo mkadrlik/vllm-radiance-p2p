@@ -80,7 +80,7 @@ First boot takes 7-15 minutes (compilation). Subsequent boots use cached `./data
 ├── scripts/                # Helper scripts (optional)
 │   └── radiance_build_state.sh
 ├── AGENTS.md               # Engineering notes (not needed to run)
-└── .gitea/                 # CI pipeline (not needed to run)
+└── .ci/                    # CI pipeline
 ```
 
 ## Configuration
