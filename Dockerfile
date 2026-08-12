@@ -20,12 +20,6 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Install vLLM with Radiance fork
-# Note: This assumes the radiance fork is available as a pip package or git repo
-RUN pip3 install --no-cache-dir \
-    git+https://codeberg.org/StillDeadcode/radiance.git@v0.5.7 \
-    && pip3 install --no-cache-dir vllm==0.1.dev1
-
 # Copy application code
 COPY . .
 
