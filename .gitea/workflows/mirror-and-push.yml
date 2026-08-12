@@ -67,14 +67,39 @@ jobs:
       - name: Pre-pull base image
         run: docker pull stilldeadcode/vllm-radiance:0.5.7
 
+      - name: Generate semver tag
+        id: semver
+        run: |
+          # Generate semver from commit count since first commit
+          FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+          COMMITS=$(git rev-list --count $FIRST_COMMIT..HEAD)
+          echo "semver=v0.0.$COMMITS" >> $GITHUB_OUTPUT
+
+      - name: Create semver git tag
+        run: |
+          git tag -f ${{ steps.semver.outputs.semver }}
+          git push origin ${{ steps.semver.outputs.semver }} --force
+          git push github ${{ steps.semver.outputs.semver }} --force
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/vllm-radiance-p2p
+          images: |
+            ghcr.io/${{ github.repository_owner }}/vllm-radiance-p2p
+            192.168.50.11:3042/mkadrlik/vllm-radiance-p2p
           tags: |
             type=raw,value=latest
+            type=semver,pattern={{version}}
             type=raw,value={{branch}}-{{sha}}
+
+      - name: Login to Gitea Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: 192.168.50.11:3042
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITEA_TOKEN }}
+          insecure: true
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
