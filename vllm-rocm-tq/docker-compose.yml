@@ -24,7 +24,10 @@ networks:
 
 services:
   vllm-rocm-tq:
-    image: ${VLLM_TQ_IMAGE:-ghcr.io/[username]/vllm-rocm-tq:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-rocm-tq:latest}
     restart: unless-stopped
     ipc: shareable
     container_name: vllm-rocm-tq
