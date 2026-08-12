@@ -54,6 +54,12 @@ jobs:
           token: ${{ secrets.GITEA_TOKEN }}
           fetch-depth: 0
 
+      - name: Configure git credentials
+        run: |
+          git config --global user.name "Gitea Actions"
+          git config --global user.email "actions@gitea.local"
+          git config --global url."http://${{ secrets.GITEA_TOKEN }}@192.168.50.11:3042/".insteadOf "http://192.168.50.11:3042/"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
