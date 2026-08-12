@@ -1,5 +1,12 @@
 # vLLM Inference on AMD RDNA3 (gfx1100)
 
+> This project is a port for AMD Radeon RX 7900 XTX (gfx1100). The base container
+> image `stilldeadcode/vllm-radiance:0.5.7` is built from the Radiance fork by
+> [StillDeadcode](https://codeberg.org/StillDeadcode/vllm-radiance/), which provides the TP2 P2P
+> patches, CUDA-graph tuning, and AITER integration that make this work. Huge thanks
+> to them for the excellent upstream work — this repo is just a deployment wrapper
+> and tuning guide built on top of their container.
+
 One command to start. Three profiles. Pick one.
 
 ```bash
