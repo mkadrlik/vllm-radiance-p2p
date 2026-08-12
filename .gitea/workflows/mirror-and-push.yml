@@ -90,7 +90,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/vllm-radiance-p2p
-            192.168.50.11:3042/mkadrlik/vllm-radiance-p2p
+            nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p
           tags: |
             type=raw,value=latest
             type=semver,pattern={{version}}
@@ -99,7 +99,7 @@ jobs:
       - name: Login to Gitea Container Registry
         uses: docker/login-action@v3
         with:
-          registry: 192.168.50.11:3042
+          registry: nas.kadrlik.home:3042
           username: ${{ github.actor }}
           password: ${{ secrets.GITEA_TOKEN }}
           insecure: true
