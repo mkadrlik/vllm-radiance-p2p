@@ -84,12 +84,6 @@ jobs:
           COMMITS=$(git rev-list --count $FIRST_COMMIT..HEAD)
           echo "semver=v0.0.$COMMITS" >> $GITHUB_OUTPUT
 
-      - name: Create semver git tag
-        run: |
-          git tag -f ${{ steps.semver.outputs.semver }}
-          git push origin ${{ steps.semver.outputs.semver }} --force
-          git push github ${{ steps.semver.outputs.semver }} --force
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
