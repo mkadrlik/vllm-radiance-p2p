@@ -26,11 +26,11 @@ jobs:
       - name: Ensure GitHub repo exists
         run: |
           curl -sfL -H "Authorization: token ${{ vars.GH_TOKEN }}" \
-            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p > /dev/null || \
+            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p > /dev/null 2>&1 || \
           curl -sfL -X POST -H "Authorization: token ${{ vars.GH_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             -d '{"name":"vllm-radiance-p2p","private":true}' \
-            https://api.github.com/user/repos > /dev/null
+            https://api.github.com/user/repos > /dev/null 2>&1 || true
 
       - name: Add GitHub remote
         run: |
