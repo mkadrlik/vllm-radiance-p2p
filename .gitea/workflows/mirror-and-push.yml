@@ -23,9 +23,18 @@ jobs:
           git config user.name "Gitea Actions"
           git config user.email "actions@gitea.local"
 
+      - name: Ensure GitHub repo exists
+        run: |
+          curl -sfL -H "Authorization: token ${{ vars.GH_TOKEN }}" \
+            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p > /dev/null || \
+          curl -sfL -X POST -H "Authorization: token ${{ vars.GH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"name":"vllm-radiance-p2p","private":true}' \
+            https://api.github.com/user/repos > /dev/null
+
       - name: Add GitHub remote
         run: |
-          git remote add github https://${{ vars.GH_TOKEN }}@github.com/${{ github.repository_owner }}/vllm-radiance-p2p.git
+          git remote add github https://${{ vars.GH_TOKEN }}@github.com/mkadrlik/vllm-radiance-p2p.git
 
       - name: Mirror to GitHub (excluding .gitea folder)
         run: |
