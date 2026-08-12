@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   mirror-to-github:
-    runs-on: [self-hosted, linux, host]
+    runs-on: [self-hosted:host, linux:host, amd64:host]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
           git push github --force --tags
 
   build-and-push:
-    runs-on: [self-hosted, linux, host]
+    runs-on: [self-hosted:host, linux:host, amd64:host]
     needs: mirror-to-github
     steps:
       - name: Checkout repository
