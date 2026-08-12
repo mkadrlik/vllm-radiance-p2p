@@ -5,9 +5,10 @@ builds/
 # Compile caches (GPU-specific, large, regenerated on boot)
 data/radiance-cache-*/
 data/cache/
-vllm-rocm-tq/data/triton-cache/
+awq/data/triton-cache/
 
-# HuggingFace cache
+# HuggingFace cache (all profiles)
+awq/data/hf-cache/
 data/cache/
 
 # OS files
