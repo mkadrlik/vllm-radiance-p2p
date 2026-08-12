@@ -204,8 +204,8 @@ services:
   awq:
     profiles: ["awq"]
     build:
-      context: ./awq
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.awq
     image: ${VLLM_TQ_IMAGE:-ghcr.io/mkadrlik/vllm-awq:latest}
     container_name: vllm-awq
     restart: unless-stopped
@@ -220,8 +220,8 @@ services:
     ports:
       - "${VLLM_HOST_PORT:-13309}:${VLLM_PORT:-8001}"
     volumes:
-      - ./awq/data/hf-cache:/root/.cache/huggingface
-      - ./awq/data/triton-cache:/root/.triton:rw
+      - ./data/awq-hf:/root/.cache/huggingface
+      - ./data/awq-triton:/root/.triton:rw
     command: >
       python3 -m vllm.entrypoints.openai.api_server
       --model ${MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
