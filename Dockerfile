@@ -9,7 +9,7 @@ COPY . /app
 # Set environment variables
 ENV ROCM_PATH=/opt/rocm
 ENV HIP_PATH=/opt/rocm
-ENV LD_LIBRARY_PATH=/opt/rocm/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/opt/rocm/lib:${LD_LIBRARY_PATH:-}
 
 # Expose vLLM API port
 EXPOSE 13313
