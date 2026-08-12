@@ -52,6 +52,21 @@ Environment variables in `.env` override compose defaults:
 - `MODEL_NAME` — AWQ model path (default Qwen/Qwen2.5-0.5B-Instruct-AWQ)
 - `GPU_ID` — AWQ GPU index (default 0)
 
+## Radiance 27B vs 35B — Argument Differences
+
+These two profiles share **identical** build context, Dockerfile, environment variables, and all arguments except four:
+
+| Argument | 27B Quark | 35B-A3B Quark | Why |
+|----------|-----------|---------------|-----|
+| Model | `nameistoken/Qwen3.6-27B-Quark-W8A8-INT8` | `nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8` | Different model weights |
+| `--served-model-name` | `vllm-27b` | `vllm-35b` | API endpoint label |
+| `--max-model-len` | **65537** | **32768** | 35B-A3B is larger — 65k OOMs at TP2. 32k is the stable ceiling. |
+| Cache volume | `./data/radiance-cache-27b-quark:/cache` | `./data/radiance-cache-35b-a3b-quark:/cache` | Separate compile caches (Triton/Inductor are model-specific) |
+
+**Shared arguments** (identical between both): TP2, CUDA-graph sizes 1–128, `--no-async-scheduling`, `--compilation-config`, all Radiance env vars (`RADIANCE_*`, `VLLM_ROCM_USE_AITER_*`), AITER/GEMM settings, `GPU_MAX_HW_QUEUES=1`.
+
+**Gotcha:** Do not set `--max-model-len=65537` on the 35B profile — it will OOM. The 27B profile needs it because it fits; the 35B profile caps at 32k.
+
 ## Tuning Notes
 
 - Radiance profiles: `NCCL_PROTO=Simple`, `RADIANCE_FAST_REDUCE=0`, `NCCL_P2P_DISABLE` NOT needed (IOMMU off, no ACS)
