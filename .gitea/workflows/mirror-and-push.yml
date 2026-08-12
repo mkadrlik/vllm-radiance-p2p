@@ -101,7 +101,7 @@ jobs:
         with:
           registry: nas.kadrlik.home:3042
           username: mkadrlik
-          password: ${{ secrets.GH_TOKEN }}
+          password: ${{ secrets.CR_RUNNER_TOKEN }}
           insecure: true
 
       - name: Build and push Docker image
