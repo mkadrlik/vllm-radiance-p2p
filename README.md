@@ -25,6 +25,39 @@ docker compose --profile awq up -d            # Generic AWQ, single GPU
 
 ## Quick Start
 
+### Run from pre-built image (no build)
+
+```bash
+docker pull nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest
+```
+
+Then run directly — no compose needed. Arguments vary by profile:
+
+```bash
+# 35B-A3B (TP2)
+docker run -d --name vllm \
+  --gpus all --shm-size 16G -e ROCM_PATH=/opt/rocm -e HIP_PATH=/opt/rocm \
+  --privileged --security-opt seccomp=unconfined \
+  --device /dev/kfd --device /dev/dri \
+  -p 13313:13313 \
+  --entrypoint vllm \
+  nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest \
+  serve --host 0.0.0.0 --port 13313 \
+  nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8 \
+  --served-model-name vllm-35b --quantization quark \
+  --tensor-parallel-size 2 --gpu-memory-utilization 0.85 \
+  --max-model-len 32768 --max-num-batched-tokens 2048 \
+  --max-num-seqs 64 --dtype bfloat16 \
+  --attention-backend ROCM_ATTN --enable-prefix-caching \
+  --compilation-config='{"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128],"max_cudagraph_capture_size":128}' \
+  --no-async-scheduling --enable-auto-tool-choice \
+  --tool-call-parser qwen3_xml --reasoning-parser qwen3 \
+  --language-model-only --trust-remote-code \
+  -e HIP_VISIBLE_DEVICES=0,1 -e NCCL_PROTO=Simple -e GPU_MAX_HW_QUEUES=1
+```
+
+### Build from source
+
 1. Clone
 2. Set env vars (see `.env.example`)
 3. `docker compose --profile <profile> up -d`
