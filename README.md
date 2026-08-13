@@ -30,7 +30,7 @@ expected 1`) can't apply on the drifted base.
 **How to run on gfx1100 (recommended):** use the pre-built `:latest` — it IS gfx1100.
 
 ```bash
-docker pull nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest
+docker pull ghcr.io/mkadrlik/vllm-radiance-p2p:latest
 ```
 
 **How to build for gfx1100 (source build, not yet automated):** the full gfx1100
@@ -76,7 +76,7 @@ docker run -d --name vllm \
   --device /dev/kfd --device /dev/dri \
   -p 13313:13313 \
   --entrypoint vllm \
-  nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest \
+  ghcr.io/mkadrlik/vllm-radiance-p2p:latest \
   serve --host 0.0.0.0 --port 13313 \
   nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8 \
   --served-model-name vllm-35b --quantization quark \
