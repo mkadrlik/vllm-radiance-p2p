@@ -7,7 +7,16 @@ This repository documents the deployment and troubleshooting of vLLM with Radian
 ## gfx1100 image status & build (2026-08-12)
 
 **TL;DR:** the repo `:latest` is the working gfx1100 image (retagged 2026-08-12 from
-`vllm-radiance:gfx1100`). The repo `Dockerfile` does **NOT** build gfx1100.
+`vllm-radiance:gfx1100` and pushed to `ghcr.io/mkadrlik/vllm-radiance-p2p:latest` +
+`nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest`, digest
+`sha256:6253c8e6cf9c...`). The repo `Dockerfile` does **NOT** build gfx1100.
+
+**⚠️ Do NOT run `docker compose build` or `docker build .`** — it rebuilds from the
+gfx1201 stilldeadcode base and **clobbers the `:latest` tag** with a broken image
+(verified 2026-08-12: a manual build pushed over `:latest` caused the exact
+`RuntimeError: No CUDA GPUs are available` failure on gfx1100 — torch's HIP init fails
+device enumeration before vLLM even reaches the pynccl `hipErrorInvalidImage` stage).
+Pull the prebuilt image instead; only rebuild via the reproducible source build below.
 
 **Why:** the `stilldeadcode/vllm-radiance:0.5.7` base drifted to a newer Radiance source
 targeting gfx1201/RDNA4 (`_aiter_ops.py` uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py`
