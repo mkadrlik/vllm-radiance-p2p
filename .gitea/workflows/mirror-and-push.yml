@@ -37,6 +37,7 @@ jobs:
           git remote add github https://${{ secrets.GH_TOKEN }}@github.com/mkadrlik/vllm-radiance-p2p.git
 
       - name: Mirror to GitHub (excluding .gitea folder)
+        id: mirror
         run: |
           # Delete .gitea folder from git history before pushing
           git filter-branch -f --prune-empty --index-filter 'git rm -rf --cached --ignore-unmatch .gitea' HEAD 2>/dev/null || true
@@ -49,25 +50,53 @@ jobs:
           # Skip if content already mirrored (filter-branch rewrites SHAs, so compare content)
           if git diff --quiet github/main HEAD; then
             echo "GitHub main already in sync; nothing to do"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
           # main is branch-protected (no force-push) -> push to unprotected sync branch instead
           git -c credential.helper=none push github HEAD:refs/heads/mirror-sync --force
           git -c credential.helper=none push github --force --tags
 
       - name: Open PR for mirror sync
+        if: steps.mirror.outputs.pushed == 'true'
         run: |
-          # Skip if an open PR for mirror-sync already exists
-          OPEN=$(curl -s -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
-            "https://api.github.com/repos/mkadrlik/vllm-radiance-p2p/pulls?state=open&head=mkadrlik:mirror-sync")
-          if echo "$OPEN" | grep -q '"number"'; then
-            echo "PR already open for mirror-sync; skipping"
-            exit 0
-          fi
-          curl -s -X POST -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"title":"mirror: sync from Gitea","head":"mirror-sync","base":"main","body":"Automated mirror sync from the homelab Gitea repo. Sanitized (no .gitea)."}' \
-            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p/pulls
+          python3 - <<'PYEOF'
+          import json, os, urllib.request
+
+          token = os.environ["GH_TOKEN"]
+          api = "https://api.github.com/repos/mkadrlik/vllm-radiance-p2p"
+          req = urllib.request.Request(
+              f"{api}/pulls?state=open&head=mkadrlik:mirror-sync",
+              headers={"Authorization": f"token {token}"},
+          )
+          with urllib.request.urlopen(req) as r:
+              open_prs = json.load(r)
+          if open_prs:
+              print(f"PR already open: #{open_prs[0]['number']}; skipping")
+              raise SystemExit(0)
+
+          body = {
+              "title": "mirror: sync from Gitea",
+              "head": "mirror-sync",
+              "base": "main",
+              "body": "Automated mirror sync from the homelab Gitea repo. Sanitized (no .gitea).",
+          }
+          req = urllib.request.Request(
+              f"{api}/pulls",
+              data=json.dumps(body).encode(),
+              headers={
+                  "Authorization": f"token {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(req) as r:
+              pr = json.load(r)
+          print(f"Opened PR #{pr['number']}: {pr['html_url']}")
+          PYEOF
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
   build-and-push:
     runs-on: [self-hosted, linux, amd64]
