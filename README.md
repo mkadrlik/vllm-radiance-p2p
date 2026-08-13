@@ -7,6 +7,41 @@
 > to them for the excellent upstream work — this repo is just a deployment wrapper
 > and tuning guide built on top of their container.
 
+## ⚠️ gfx1100 image status (2026-08-12)
+
+**The published `:latest` IS the gfx1100 build.** It was retagged on 2026-08-12 from
+the known-good `vllm-radiance:gfx1100` image (which was a full ROCm 7.14 source build
+for `GFX_ARCH=gfx1100`).
+
+**The repo `Dockerfile` does NOT reproduce a gfx1100 image — yet.** It is
+`FROM stilldeadcode/vllm-radiance:0.5.7` (stock), and that base has drifted to a newer
+Radiance source that targets **gfx1201/RDNA4**: `_aiter_ops.py` now uses `on_gfx12x`
+and `aiter/ops/triton/gemm_a8w8.py` moved. Building it and running on RX 7900 XTX
+(gfx1100) fails at startup with:
+
+```
+torch.AcceleratorError: CUDA error: device kernel image is invalid   # hipErrorInvalidImage
+arch check : FAIL (0/2 gfx1201)
+```
+
+because `patch_gfx1100.py`'s anchor (`is_aiter_found_and_supported: anchor matched 0x,
+expected 1`) can't apply on the drifted base.
+
+**How to run on gfx1100 (recommended):** use the pre-built `:latest` — it IS gfx1100.
+
+```bash
+docker pull nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest
+```
+
+**How to build for gfx1100 (source build, not yet automated):** the full gfx1100
+adaptation lives in [`build/`](./build/) — the complete patch set, HIP kernel sources
+(`router_gemm.hip`, `radiance_ar_ext.hip`), radiance modules, AITER/GEMM/MoE/FP8 configs,
+`radiance_preamble.py`, and `radiance_entrypoint.sh`, recovered from the working image.
+It was originally built from a ROCm 7.14 base with source-built wheels for
+`GFX_ARCH=gfx1100`; those wheels are not recoverable, so reproducing it requires
+rebuilding that source pipeline. See `AGENTS.md` → *gfx1100 build* for the exact steps.
+Until automated: do not `docker build` the repo and expect gfx1100 — run the pre-built image.
+
 One command to start. Three profiles. Pick one.
 
 ```bash
