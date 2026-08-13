@@ -4,6 +4,49 @@
 
 This repository documents the deployment and troubleshooting of vLLM with Radiance custom fork for tensor parallel (TP2) P2P on AMD RDNA3 GPUs (RX 7900 XTX, gfx1100).
 
+## gfx1100 image status & build (2026-08-12)
+
+**TL;DR:** the repo `:latest` is the working gfx1100 image (retagged 2026-08-12 from
+`vllm-radiance:gfx1100`). The repo `Dockerfile` does **NOT** build gfx1100.
+
+**Why:** the `stilldeadcode/vllm-radiance:0.5.7` base drifted to a newer Radiance source
+targeting gfx1201/RDNA4 (`_aiter_ops.py` uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py`
+moved). `docker build` of the repo therefore produces an image that dies on gfx1100 at
+pynccl init with `hipErrorInvalidImage` (`arch check FAIL 0/2 gfx1201`; the
+`patch_gfx1100.py` anchor `is_aiter_found_and_supported` matches 0x, expected 1).
+
+**The known-good gfx1100 image** (`vllm-radiance:gfx1100`, 6253c8e6cf9c) was a **full ROCm
+7.14 source build** with `ARG GFX_ARCH=gfx1100` (torch/triton/aiter 0.1.17/vllm 0.26.0 wheels
+for gfx1100) plus the recovered patch layer. Its wheels are NOT recoverable from the image.
+
+**To build for gfx1100 (reproducible source build, not yet automated):** the complete gfx1100
+adaptation is in `build/` (patches/, radiance-modules/, aiter-configs/, moe-configs/,
+fp8-configs/, radiance_preamble.py, radiance_entrypoint.sh), recovered from the working
+image. Reconstructing the build:
+1. Start from a ROCm 7.14 multi-arch base (`GFX_ARCH=gfx1100`), NOT the drifted
+   stilldeadcode 0.5.7 prebuilt.
+2. Build/install the source wheels for gfx1100: `PYTORCH_ROCM_ARCH=gfx1100
+   HIP_ARCHITECTURES=gfx1100 AMDGPU_TARGETS=gfx1100 GPU_ARCHS=gfx1100`.
+3. Layer `build/` (order = the working image's `docker history`):
+   - COPY `patches/` → `/opt/patches`; run each `patch_*.py` (patch_gfx1100,
+     patch_router_gemm, patch_unified_attention_lds, patch_gdn_wmma, install_radiance_hooks,
+     patch_unpad, patch_mtp_mm_mask, patch_mtp_loopbreak, patch_qwen3_toolparse,
+     patch_from_json_filter, patch_dynamo_metrics).
+   - COPY `radiance-modules/` → site-packages; `aiter-configs/gfx1100-GEMM-A8W8.json` →
+     aiter gemm configs; `moe-configs/` → fused_moe configs; `fp8-configs/` → quantization
+     utils configs.
+   - hipcc-compile `router_gemm.hip` → `router_gemm.so` and `radiance_ar_ext.hip` →
+     `radiance_ar_ext.so` with `-O3 -std=c++17 -fPIC -shared --offload-arch=gfx1100
+     -DTEMPORAL $(python -m pybind11 --includes)`.
+   - COPY `radiance_preamble.py` + `radiance_entrypoint.sh` → `/opt`; ENTRYPOINT
+     `/opt/radiance_entrypoint.sh`. Set `PYTORCH_ROCM_ARCH=gfx1100 RADIANCE_GFX_ARCH=gfx1100`
+     etc.
+4. Verify: `/v1/models` lists the model; log shows `P2P access : ENABLED 0↔1`; no
+   hipError/InvalidImage.
+
+**Until automated:** run the pre-built `:latest` (it IS gfx1100); do not `docker build`
+from the repo and expect gfx1100.
+
 ## Key Engineering Findings
 
 ### P2P on gfx1100 — What Actually Works
