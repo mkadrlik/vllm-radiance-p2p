@@ -40,9 +40,34 @@ jobs:
         run: |
           # Delete .gitea folder from git history before pushing
           git filter-branch -f --prune-empty --index-filter 'git rm -rf --cached --ignore-unmatch .gitea' HEAD 2>/dev/null || true
-          # Push all refs to GitHub -- disable credential helper explicitly
-          git -c credential.helper=none push github --force --all
+          # Safety: .gitea must never reach GitHub (user directive)
+          if git ls-tree -r --name-only HEAD | grep -q '^\.gitea/'; then
+            echo "ERROR: .gitea still present after filter-branch; aborting"
+            exit 1
+          fi
+          git fetch github main
+          # Skip if content already mirrored (filter-branch rewrites SHAs, so compare content)
+          if git diff --quiet github/main HEAD; then
+            echo "GitHub main already in sync; nothing to do"
+            exit 0
+          fi
+          # main is branch-protected (no force-push) -> push to unprotected sync branch instead
+          git -c credential.helper=none push github HEAD:refs/heads/mirror-sync --force
           git -c credential.helper=none push github --force --tags
+
+      - name: Open PR for mirror sync
+        run: |
+          # Skip if an open PR for mirror-sync already exists
+          OPEN=$(curl -s -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+            "https://api.github.com/repos/mkadrlik/vllm-radiance-p2p/pulls?state=open&head=mkadrlik:mirror-sync")
+          if echo "$OPEN" | grep -q '"number"'; then
+            echo "PR already open for mirror-sync; skipping"
+            exit 0
+          fi
+          curl -s -X POST -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"mirror: sync from Gitea","head":"mirror-sync","base":"main","body":"Automated mirror sync from the homelab Gitea repo. Sanitized (no .gitea)."}' \
+            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p/pulls
 
   build-and-push:
     runs-on: [self-hosted, linux, amd64]
