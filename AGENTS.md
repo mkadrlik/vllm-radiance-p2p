@@ -8,7 +8,7 @@ This repository documents the deployment and troubleshooting of vLLM with Radian
 
 **TL;DR:** the repo `:latest` is the working gfx1100 image (retagged 2026-08-12 from
 `vllm-radiance:gfx1100` and pushed to `ghcr.io/mkadrlik/vllm-radiance-p2p:latest` +
-`nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest`, digest
+`mkadrlik/vllm-radiance-p2p:latest` (private registry), digest
 `sha256:6253c8e6cf9c...`). The repo `Dockerfile` does **NOT** build gfx1100.
 
 **⚠️ Do NOT run `docker compose build` or `docker build .`** — it rebuilds from the
