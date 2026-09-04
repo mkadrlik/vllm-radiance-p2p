@@ -63,7 +63,7 @@ docker compose --profile awq up -d            # Generic AWQ, single GPU
 ### Run from pre-built image (no build)
 
 ```bash
-docker pull nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest
+docker pull ghcr.io/mkadrlik/vllm-radiance-p2p:latest
 ```
 
 Then run directly — no compose needed. Arguments vary by profile:
