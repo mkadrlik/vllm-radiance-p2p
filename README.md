@@ -96,10 +96,12 @@ curl http://localhost:13313/v1/chat/completions \
   arch check : FAIL (0/2 gfx1201)
   ```
 
-- The repo `Dockerfile` builds from `stilldeadcode/vllm-radiance:0.5.7`, whose
-  source has drifted to gfx1201/RDNA4, so **it cannot reproduce a gfx1100
-  image yet**. The compose file therefore has no `build:` for the radiance
-  profiles — they always use the prebuilt image.
+- There is deliberately **no plain `Dockerfile`** in this repo. The one that
+  existed built from `stilldeadcode/vllm-radiance:0.5.7` (stock), whose source
+  has drifted to gfx1201/RDNA4 — building it produced an image that fails on
+  gfx1100. It was removed to keep the footgun unrunnable. The gfx1100 build
+  recipe is `Dockerfile.gfx1100` + `build/` (see below). The compose file has
+  no `build:` for the radiance profiles — they always use the prebuilt image.
 
 The complete gfx1100 adaptation (patches, HIP kernel sources, AITER configs,
 entrypoint) is in-tree under [`build/`](./build/) with the layering recipe in
@@ -166,7 +168,6 @@ The 27B profile needs it because it fits; the 35B profile caps at 32k.
 ├── Dockerfile.gfx1100      # gfx1100 adaptation layer build (advanced)
 ├── build/                  # gfx1100 source-build inputs (patches, HIP kernels, configs)
 ├── Dockerfile.awq          # AWQ build (awq profile only)
-├── Dockerfile              # ⚠️ broken for gfx1100 (drifted base) — see above
 ├── data/                   # All caches (gitignored, created on first run)
 ├── scripts/                # Helper scripts (optional)
 └── AGENTS.md               # Engineering notes (not needed to run)
