@@ -11,8 +11,8 @@
 #   docker compose --profile radiance-27b up -d   # pulls the prebuilt gfx1100 image
 #
 # The radiance profiles use the prebuilt image from ghcr.io — there is NO build
-# step for them, deliberately: the repo Dockerfile's base image has drifted to
-# gfx1201/RDNA4 and produces an image that fails on gfx1100 (see AGENTS.md).
+# step for them, deliberately: the gfx1100 image is produced by Dockerfile.gfx1100
+# from the build/ adaptation layer (see AGENTS.md), not by this compose file.
 
 networks:
   backend:
