@@ -1,0 +1,15 @@
+# Hotfix overlay for the RADIANCE_FAST_REDUCE MTP-capture deadlock.
+# FROM the known-good gfx1100 runtime image (the one production runs today) and
+# swaps in the capture-gated radiance_allreduce.py. Nothing else changes, so the
+# A/B against production is exactly the one-file fix.
+#
+#   sudo -n -u mkadrlik docker build -f Dockerfile.fix-ar -t vllm-radiance-gfx1100:fix-ar .
+#
+# (Full source build via Dockerfile.gfx1100 is currently blocked by the upstream
+# stilldeadcode:0.5.7 base drift to gfx1201 — patch_gfx1100 anchor matches 0x.
+# This overlay sidesteps that and is the correct deploy vehicle for a one-file fix.)
+FROM ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100
+
+COPY build/radiance-modules/radiance_allreduce.py \
+     /opt/vllm/lib/python3.12/site-packages/radiance_allreduce.py
+RUN python -c "import ast; ast.parse(open('/opt/vllm/lib/python3.12/site-packages/radiance_allreduce.py').read()); print('radiance_allreduce parse OK')"
