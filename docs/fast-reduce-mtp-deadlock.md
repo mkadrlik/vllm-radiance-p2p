@@ -47,6 +47,10 @@ Contributing factors:
 - Decode hot path (bs 1..64 graphs) keeps the fast kernel — no performance regression
   by construction; confirm with bench after deploy.
 
+**Behavior change:** with `--enforce-eager` (no graphs) the fast path is now inert — every
+all_reduce takes RCCL. That mode was already the slow path on radiance (graphs are the
+recommended config); document it in the PR.
+
 ## Verification (real kernel, gfx1100 TP=2, 2026-09-05)
 
 `scripts/verify_fast_reduce_capture.py` (torchrun, 2 procs, GPUs ROCR 1,2):
