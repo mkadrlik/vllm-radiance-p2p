@@ -7,50 +7,11 @@
 > to them for the excellent upstream work — this repo is just a deployment wrapper
 > and tuning guide built on top of their container.
 
-## ⚠️ gfx1100 image status (2026-08-12)
+## What this is
 
-**The published `:latest` IS the gfx1100 build.** It was retagged on 2026-08-12 from
-the known-good `vllm-radiance:gfx1100` image (which was a full ROCm 7.14 source build
-for `GFX_ARCH=gfx1100`).
-
-**The repo `Dockerfile` does NOT reproduce a gfx1100 image — yet.** It is
-`FROM stilldeadcode/vllm-radiance:0.5.7` (stock), and that base has drifted to a newer
-Radiance source that targets **gfx1201/RDNA4**: `_aiter_ops.py` now uses `on_gfx12x`
-and `aiter/ops/triton/gemm_a8w8.py` moved. Building it and running on RX 7900 XTX
-(gfx1100) fails at startup with:
-
-```
-torch.AcceleratorError: CUDA error: device kernel image is invalid   # hipErrorInvalidImage
-arch check : FAIL (0/2 gfx1201)
-```
-
-because `patch_gfx1100.py`'s anchor (`is_aiter_found_and_supported: anchor matched 0x,
-expected 1`) can't apply on the drifted base.
-
-**How to run on gfx1100 (recommended):** use the pre-built `:latest` — it IS gfx1100.
-
-```bash
-docker pull ghcr.io/mkadrlik/vllm-radiance-p2p:latest
-```
-
-**How to build for gfx1100 (source build, not yet automated):** the full gfx1100
-adaptation lives in [`build/`](./build/) — the complete patch set, HIP kernel sources
-(`router_gemm.hip`, `radiance_ar_ext.hip`), radiance modules, AITER/GEMM/MoE/FP8 configs,
-`radiance_preamble.py`, and `radiance_entrypoint.sh`, recovered from the working image.
-It was originally built from a ROCm 7.14 base with source-built wheels for
-`GFX_ARCH=gfx1100`; those wheels are not recoverable, so reproducing it requires
-rebuilding that source pipeline. See `AGENTS.md` → *gfx1100 build* for the exact steps.
-Until automated: do not `docker build` the repo and expect gfx1100 — run the pre-built image.
-
-One command to start. Three profiles. Pick one.
-
-```bash
-docker compose --profile radiance-27b up -d   # Qwen3.6-27B Quark, TP2
-docker compose --profile radiance-35b up -d   # Qwen3.6-35B-A3B Quark, TP2
-docker compose --profile awq up -d            # Generic AWQ, single GPU
-```
-
-## Profiles
+Prebuilt Docker image + `docker-compose.yml` for serving quantized Qwen models on
+**2× AMD RX 7900 XTX (gfx1100)** with tensor-parallel 2 and PCIe P2P, or any AWQ
+model on a single GPU. No CUDA, no NVIDIA.
 
 | Profile | Model | GPUs | Port | Quant |
 |---------|-------|------|------|-------|
@@ -58,95 +19,154 @@ docker compose --profile awq up -d            # Generic AWQ, single GPU
 | `radiance-35b` | Qwen3.6-35B-A3B-Quark | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 |
 | `awq` | Any AWQ model (configurable) | 1 GPU | 13309 | AWQ |
 
-## Quick Start
+## Requirements
 
-### Run from pre-built image (no build)
+- 1 or 2× AMD RX 7900 XTX (gfx1100; RDNA3). A single 24 GB card runs the `awq`
+  profile; the radiance profiles need **two** cards.
+- Linux host with the `amdgpu` kernel driver and **IOMMU disabled** (or ACS
+  overridden) for TP2 P2P — see [AGENTS.md](./AGENTS.md) → *P2P on gfx1100*.
+- Docker Engine with the `docker compose` plugin, and `--device` access to
+  `/dev/kfd` and `/dev/dri` (the compose file handles this).
+- ~40 GB free disk for the image, plus model weights (~27–35 GB each).
+- A HuggingFace account that has accepted the model's license terms.
+
+## Quick start
+
+### 1. Configure
 
 ```bash
-docker pull ghcr.io/mkadrlik/vllm-radiance-p2p:latest
+cp .env.example .env
 ```
 
-Then run directly — no compose needed. Arguments vary by profile:
+Open `.env` and set `HF_TOKEN` (get one at
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)).
+Everything else has working defaults. Optional: change ports, model names, or
+memory limits — see [Environment variables](#environment-variables).
+
+### 2. Pick a profile and start
 
 ```bash
-# 35B-A3B (TP2)
-docker run -d --name vllm \
-  --gpus all --shm-size 16G -e ROCM_PATH=/opt/rocm -e HIP_PATH=/opt/rocm \
-  --privileged --security-opt seccomp=unconfined \
-  --device /dev/kfd --device /dev/dri \
-  -p 13313:13313 \
-  --entrypoint vllm \
-  ghcr.io/mkadrlik/vllm-radiance-p2p:latest \
-  serve --host 0.0.0.0 --port 13313 \
-  nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8 \
-  --served-model-name vllm-35b --quantization quark \
-  --tensor-parallel-size 2 --gpu-memory-utilization 0.85 \
-  --max-model-len 32768 --max-num-batched-tokens 2048 \
-  --max-num-seqs 64 --dtype bfloat16 \
-  --attention-backend ROCM_ATTN --enable-prefix-caching \
-  --compilation-config='{"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128],"max_cudagraph_capture_size":128}' \
-  --no-async-scheduling --enable-auto-tool-choice \
-  --tool-call-parser qwen3_xml --reasoning-parser qwen3 \
-  --language-model-only --trust-remote-code \
-  -e HIP_VISIBLE_DEVICES=0,1 -e NCCL_PROTO=Simple -e GPU_MAX_HW_QUEUES=1
+docker compose --profile radiance-27b up -d   # Qwen3.6-27B Quark, TP2
+# or
+docker compose --profile radiance-35b up -d   # Qwen3.6-35B-A3B Quark, TP2
+# or
+docker compose --profile awq up -d            # Generic AWQ, single GPU
 ```
 
-### Build from source
+The radiance profiles pull the prebuilt image
+`ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100` (see
+[Image provenance](#image-provenance-read-this)); the `awq` profile builds
+locally from `Dockerfile.awq` on first run.
 
-1. Clone
-2. Set env vars (see `.env.example`)
-3. `docker compose --profile <profile> up -d`
+**First boot takes 20–30 minutes** — vLLM compiles kernels for your exact GPU
+set (the healthcheck `start_period` of 1800 s accounts for this). Subsequent
+boots reuse the caches under `./data/` and start in ~2 minutes.
 
-First boot takes 7-15 minutes (compilation). Subsequent boots use cached `./data/`.
+### 3. Verify
+
+```bash
+docker compose --profile radiance-27b logs -f qwen-27b   # wait for "Uvicorn running"
+curl http://localhost:13313/v1/models
+```
+
+Then point any OpenAI-compatible client at `http://localhost:13313/v1` with the
+model name `qwen-27b` (or `qwen-35b` / your `AWQ_SERVED_MODEL_NAME`):
+
+```bash
+curl http://localhost:13313/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen-27b", "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+## ⚠️ Image provenance — read this
+
+**Pin the `:gfx1100` tag — do not rely on `:latest`, and do not run
+`docker compose build` or `docker build .` for the radiance profiles.**
+
+- `ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100` — the verified gfx1100 build
+  (immutable digest `sha256:6253c8e6cf9c…`). This is what the compose file
+  references by default.
+- `:latest` currently points at the same gfx1100 image (retagged back on
+  2026-08-12 after being clobbered), but it is **mutable** and has been broken
+  before. The `main-<sha>` tags on this registry are gfx1201-broken builds. On
+  a 7900 XTX a broken image dies at startup:
+
+  ```
+  torch.AcceleratorError: CUDA error: device kernel image is invalid   # hipErrorInvalidImage
+  arch check : FAIL (0/2 gfx1201)
+  ```
+
+- The repo `Dockerfile` builds from `stilldeadcode/vllm-radiance:0.5.7`, whose
+  source has drifted to gfx1201/RDNA4, so **it cannot reproduce a gfx1100
+  image yet**. The compose file therefore has no `build:` for the radiance
+  profiles — they always use the prebuilt image.
+
+The complete gfx1100 adaptation (patches, HIP kernels, AITER configs,
+entrypoint) is recovered from the working image and the reproducible source
+build is documented in [AGENTS.md](./AGENTS.md) → *gfx1100 build*. Until that
+build is automated, run the prebuilt `:gfx1100` image.
+
+## Environment variables
+
+All are set in `.env` (copy from `.env.example`, which documents each one).
+The compose file provides defaults for every variable, so `.env` only needs
+`HF_TOKEN` to get started.
+
+| Variable | Default | Used by | Purpose |
+|----------|---------|---------|---------|
+| `HF_TOKEN` | — | all | HuggingFace download auth (first boot only; weights are cached) |
+| `RADIANCE_IMAGE` | `ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100` | radiance | prebuilt image to run |
+| `VLLM_HOST_PORT` | `13313` | radiance | host port for the API |
+| `HIP_VISIBLE_DEVICES` | `0,1` | radiance | the two TP2 GPUs |
+| `TENSOR_PARALLEL_SIZE` | `2` | radiance | number of GPUs |
+| `VLLM_SHM_SIZE` | `16G` | radiance | shared memory for NCCL |
+| `VLLM_27B_GPU_MEM_UTIL` / `VLLM_35B_GPU_MEM_UTIL` | `0.85` | radiance | KV-cache budget per GPU |
+| `VLLM_27B_MAX_MODEL_LEN` | `65537` | 27b | context length |
+| `VLLM_35B_MAX_MODEL_LEN` | `32768` | 35b | context length — **do not raise, OOMs** |
+| `VLLM_START_PERIOD` | `1800` | radiance | healthcheck grace for first-boot compile |
+| `AWQ_IMAGE` | `vllm-radiance-p2p-awq:latest` | awq | local build tag |
+| `AWQ_MODEL_NAME` | `Qwen/Qwen2.5-0.5B-Instruct-AWQ` | awq | any AWQ model on HF |
+| `AWQ_HOST_PORT` | `13309` | awq | host port for the API |
+| `AWQ_GPU_ID` | `0` | awq | which single GPU |
+| `VLLM_EXTRA_ARGS` | — | awq | extra vLLM flags, appended verbatim |
+
+## 27B vs 35B — argument differences
+
+These two profiles share **identical** image, environment variables, and all
+arguments except four:
+
+| Argument | 27B Quark | 35B-A3B Quark | Why |
+|----------|-----------|---------------|-----|
+| Model | `nameistoken/Qwen3.6-27B-Quark-W8A8-INT8` | `nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8` | Different model weights |
+| `--served-model-name` | `qwen-27b` | `qwen-35b` | API endpoint label |
+| `--max-model-len` | **65537** | **32768** | 35B-A3B is larger — 65k OOMs at TP2. 32k is the stable ceiling. |
+| Cache volume | `./data/radiance-cache-27b-quark:/cache` | `./data/radiance-cache-35b-a3b-quark:/cache` | Separate compile caches (Triton/Inductor are model-specific) |
+
+**Gotcha:** Do not set `--max-model-len=65537` on the 35B profile — it will OOM.
+The 27B profile needs it because it fits; the 35B profile caps at 32k.
+
+## Tuning notes
+
+- Radiance profiles: `NCCL_PROTO=Simple`, `RADIANCE_FAST_REDUCE=0`,
+  `NCCL_P2P_DISABLE` NOT needed (IOMMU off, no ACS).
+- AWQ: uses `ROCR_VISIBLE_DEVICES` (not `HIP_VISIBLE_DEVICES`) to avoid a Triton
+  error 101 on ROCm 7.
+- Caches under `./data/` are per-profile and gitignored. If boot dies mid-compile
+  after a crash: `find ./data -name '*.json' -size 0 -delete`.
+- `RADIANCE_RUN_BWTEST` must stay `0` — see [AGENTS.md](./AGENTS.md).
 
 ## Structure
 
 ```
 .
 ├── docker-compose.yml      # All profiles in one file
-├── Dockerfile              # Radiance build (radiance-27b/35b)
-├── Dockerfile.awq          # AWQ build (awq profile)
-├── .env.example            # Copy to .env and fill in HF_TOKEN
-├── data/                   # All caches (gitignored)
-│   ├── cache/              # Radiance HF cache
-│   ├── radiance-cache-*/   # Radiance compile caches
-│   ├── awq-hf/             # AWQ HF cache
-│   └── awq-triton/         # AWQ Triton cache
+├── .env.example            # Copy to .env and set HF_TOKEN
+├── Dockerfile.awq          # AWQ build (awq profile only)
+├── Dockerfile              # ⚠️ broken for gfx1100 (drifted base) — see above
+├── data/                   # All caches (gitignored, created on first run)
 ├── scripts/                # Helper scripts (optional)
-│   └── radiance_build_state.sh
-├── AGENTS.md               # Engineering notes (not needed to run)
-└── .ci/                    # CI pipeline
+└── AGENTS.md               # Engineering notes (not needed to run)
 ```
-
-## Configuration
-
-Environment variables in `.env` override compose defaults:
-
-- `HF_TOKEN` — required for Radiance profiles (HuggingFace download)
-- `VLLM_HOST_PORT` — AWQ host port (default 13309)
-- `MODEL_NAME` — AWQ model path (default Qwen/Qwen2.5-0.5B-Instruct-AWQ)
-- `GPU_ID` — AWQ GPU index (default 0)
-
-## Radiance 27B vs 35B — Argument Differences
-
-These two profiles share **identical** build context, Dockerfile, environment variables, and all arguments except four:
-
-| Argument | 27B Quark | 35B-A3B Quark | Why |
-|----------|-----------|---------------|-----|
-| Model | `nameistoken/Qwen3.6-27B-Quark-W8A8-INT8` | `nameistoken/Qwen3.6-35B-A3B-Quark-W8A8-INT8` | Different model weights |
-| `--served-model-name` | `vllm-27b` | `vllm-35b` | API endpoint label |
-| `--max-model-len` | **65537** | **32768** | 35B-A3B is larger — 65k OOMs at TP2. 32k is the stable ceiling. |
-| Cache volume | `./data/radiance-cache-27b-quark:/cache` | `./data/radiance-cache-35b-a3b-quark:/cache` | Separate compile caches (Triton/Inductor are model-specific) |
-
-**Shared arguments** (identical between both): TP2, CUDA-graph sizes 1–128, `--no-async-scheduling`, `--compilation-config`, all Radiance env vars (`RADIANCE_*`, `VLLM_ROCM_USE_AITER_*`), AITER/GEMM settings, `GPU_MAX_HW_QUEUES=1`.
-
-**Gotcha:** Do not set `--max-model-len=65537` on the 35B profile — it will OOM. The 27B profile needs it because it fits; the 35B profile caps at 32k.
-
-## Tuning Notes
-
-- Radiance profiles: `NCCL_PROTO=Simple`, `RADIANCE_FAST_REDUCE=0`, `NCCL_P2P_DISABLE` NOT needed (IOMMU off, no ACS)
-- AWQ: Uses `ROCR_VISIBLE_DEVICES` (not HIP_VISIBLE_DEVICES) to avoid Triton error 101
-- Shared cache dirs are gitignored — wipe `find <cache> -name '*.json' -size 0 -delete` if boot fails mid-compile
 
 ## Performance
 
@@ -155,3 +175,16 @@ These two profiles share **identical** build context, Dockerfile, environment va
 | 27B Quark (CUDA-graph) | ~22 tok/s | tg128, MTP off |
 | 35B-A3B Quark (CUDA-graph) | ~19 tok/s | tg128, MTP off |
 | AWQ (eager) | varies | Depends on model size |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `device kernel image is invalid` at startup | Running a gfx1201 image (`:latest` or a local build) on gfx1100 | Use `:gfx1100`; do not rebuild |
+| Hangs after `Using network interface lo` | Custom all-reduce path | `RADIANCE_FAST_REDUCE=0` (compose default) |
+| Host reboots on boot | P2P bandwidth sweep | `RADIANCE_RUN_BWTEST=0` (compose default) |
+| `JSONDecodeError` on boot | 0-byte Triton cache from a prior crash | `find ./data -name '*.json' -size 0 -delete` |
+| 35B OOM at load | Context too long | keep `VLLM_35B_MAX_MODEL_LEN=32768` |
+| 401 / model not found on first boot | HF license not accepted | accept terms on the model page, set `HF_TOKEN` |
+
+More detail in [AGENTS.md](./AGENTS.md).
