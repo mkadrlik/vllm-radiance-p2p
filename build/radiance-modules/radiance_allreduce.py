@@ -86,8 +86,14 @@ class RadianceAllreduce:
             peer = 1 - self.rank
             self._peer_scratch = ext.open_shared(sc_handles[peer])
             self._peer_flags = ext.open_shared(fl_handles[peer])
-            # per-BLOCK device-resident seq counters (kernel increments -> replay-safe;
-            # both ranks run identical graph sequences so seq_ctr[b] stays in lockstep)
+            # per-BLOCK device-resident seq counters (kernel increments -> replay-safe).
+            # INVARIANT (enforced by the capture gate in should_custom_ar): the kernel
+            # ONLY ever executes from graph REPLAY of vLLM-captured CUDA graphs. Eager
+            # launches (which are where rank-divergent calls happen: dynamo/inductor
+            # rank-local state, warmups, profiling) are gated to RCCL, and captured
+            # kernels do not execute at capture time. vLLM's graph dispatch is driven
+            # by the broadcast scheduler output, so both ranks replay the identical
+            # graph sequence and seq_ctr[b] stays in lockstep.
             self._seq = torch.zeros(maxb, dtype=torch.int32, device=self.device)
         except Exception as e:
             _log(f"custom AR disabled: IPC setup failed ({e!r})")
@@ -133,6 +139,22 @@ class RadianceAllreduce:
 
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
         if self.disabled:
+            return False
+        # FAST-REDUCE ONLY INSIDE CUDA-GRAPH CAPTURE. An eager launch here is a
+        # fire-and-forget spin kernel: if the ranks ever disagree on the eager
+        # all_reduce sequence (dynamo recompile asymmetry, rank-0-only work,
+        # profile runs), the peer's kernel spins on my_flags[b] < seq for
+        # ~4000s (RADIANCE_SPIN_MAX uncached PCIe reads) and the next device-wide
+        # sync — which torch.cuda.graph() capture_begin performs — wedges that
+        # rank forever. That is the MTP drafter capture deadlock: hang at
+        # "Capturing CUDA graphs 0/5", both ranks watchdog on the next NCCL
+        # collective. Captured kernels do not execute at capture time, so they
+        # cannot spin during capture, and at replay both ranks execute the
+        # identical scheduler-driven graph sequence, which is exactly the SPMD
+        # lockstep assumption the per-block device-resident seq counters need.
+        # Eager all_reduces (warmup, profiling, >max-capture prefill batches)
+        # fall through to RCCL: symmetric and deadlock-free.
+        if not torch.cuda.is_current_stream_capturing():
             return False
         if inp.dtype not in _DTYPE_CODE:
             return False
