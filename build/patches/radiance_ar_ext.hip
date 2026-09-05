@@ -22,11 +22,13 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <vector>
 namespace py = pybind11;
 
 #define RADIANCE_SPIN_MAX 4000000000ULL
@@ -59,13 +61,21 @@ __device__ __forceinline__ int4 vadd(const int4& a, const int4& b) {
   return r;
 }
 
-// Multi-block one-shot all-reduce. Each block owns words [start,end) of the 16B-word
+// Multi-block one-shot all-reduce. Each block owns a contiguous chunk of 16B-word
 // space and drives its own flag handshake; fully independent, no cross-block sync.
+// TWO-PHASE handshake (data flag + done flag), same protocol as vLLM's ca_comm:
+//   before pushing into peer slot (s&1), wait my_done[b] >= s-2  — the peer's
+//   launch s-2 may STILL be reducing out of that slot; without this wait, a
+//   back-to-back replay of the same graph overwrites peer scratch mid-read and
+//   corrupts the result (observed in production as first-decode garbage ->
+//   divergent MTP draft decisions -> AR count divergence -> mutual spin).
+//   after reducing, post done s to the peer so it may reuse the slot.
 template <typename T, int LANES>
 __global__ void radiance_ar_mb(
     const int4* __restrict__ in4, int4* peer_base, const int4* my_base, int4* __restrict__ out4,
-    unsigned int* peer_flags, unsigned int* my_flags, unsigned int* seq_ctrs,
-    int n16, int slot_stride16, int drain, int acq) {
+    unsigned int* peer_flags, unsigned int* my_flags,
+    unsigned int* peer_done, unsigned int* my_done, unsigned int* seq_ctrs,
+    int n16, int slot_stride16, int drain, int acq, unsigned long long spin_max) {
   const int b = blockIdx.x, nb = gridDim.x, tid = threadIdx.x, nt = blockDim.x;
   __shared__ unsigned int s_seq;
   if (tid == 0) s_seq = atomicAdd(&seq_ctrs[b], 1u) + 1u;  // per-block, replay-safe
@@ -74,6 +84,18 @@ __global__ void radiance_ar_mb(
   const int slot = (int)(s & 1u);
   int4* ps = peer_base + (size_t)slot * slot_stride16;
   const int4* ms = my_base + (size_t)slot * slot_stride16;
+
+  // slot-reuse guard: wait until the peer finished READING this slot at s-2.
+  // Signed wrap-safe comparison; at steady state the peer is caught up and this
+  // does not spin at all. One thread polls, the block syncs before pushing.
+  // Abort log: high bit set = done-wait (slot reuse) timeout, clear = data-wait.
+  if (tid == 0 && s >= 3) {
+    unsigned long long z = 0;
+    while ((int)(load_sys_acq(&my_done[b]) - (s - 2u)) < 0) {
+      if (++z > spin_max) { atomicMax(&seq_ctrs[RADIANCE_MAX_BLOCKS + b], 0x80000000u | s); break; }
+    }
+  }
+  __syncthreads();
 
   const int w = (n16 + nb - 1) / nb;      // 16B words per block
   const int start = b * w;
@@ -110,8 +132,26 @@ __global__ void radiance_ar_mb(
   if (tid == 0) {
     if (drain == 2) __threadfence_system();
     store_sys_rel(&peer_flags[b], s);
+    // Flush the flag store ONTO THE WIRE before spinning. Peer-directed stores on
+    // RDNA3 ride the export path (same reason drain=3 uses expcnt for the data
+    // push): a bare release store can sit in the write-combining buffer while
+    // tid0 spins on the peer's mirror-image flag. If BOTH ranks buffer their flag,
+    // neither ever sees the other's post until a spin timeout + kernel-exit membar
+    // flushes it — the exact production signature (both ranks SPIN-ABORT on the
+    // same seq/blocks, flags arrive only after the timeout). vmcnt covers global
+    // atomics, expcnt covers export stores: wait for both.
+    asm volatile("s_waitcnt vmcnt(0) expcnt(0)" ::: "memory");
     unsigned long long z = 0;
-    while (load_sys_acq(&my_flags[b]) < s) { if (++z > RADIANCE_SPIN_MAX) break; }
+    while (load_sys_acq(&my_flags[b]) < s) {
+      if (++z > spin_max) {
+        // Timed out: the peer never posted this seq -> the ranks' AR sequences
+        // diverged (SPMD lockstep broken). Publish that fact device-side so a
+        // host sampler can see WHICH block gave up at WHICH seq instead of the
+        // kernel silently producing garbage.
+        atomicMax(&seq_ctrs[RADIANCE_MAX_BLOCKS + b], s);
+        break;
+      }
+    }
   }
   __syncthreads();
   if (acq) __threadfence_system();
@@ -125,6 +165,15 @@ __global__ void radiance_ar_mb(
       out4[k + 3 * nt] = vadd<T, LANES>(in4[k + 3 * nt], ms[k + 3 * nt]);
     }
     for (; k < end; k += nt) out4[k] = vadd<T, LANES>(in4[k], ms[k]);
+  }
+  // Signal the peer that slot (s&1) is fully READ: barrier-orders every thread's
+  // reduce loads, then tid0's release store publishes done[s] system-wide.
+  // Same wire-flush requirement as the data flag: spinners must not wait on a
+  // buffered done.
+  __syncthreads();
+  if (tid == 0) {
+    store_sys_rel(&peer_done[b], s);
+    asm volatile("s_waitcnt vmcnt(0) expcnt(0)" ::: "memory");
   }
 }
 
@@ -148,6 +197,14 @@ static int64_t open_shared(const std::string& handle) {
 static void free_shared(int64_t p) { if (p) (void)hipFree((void*)p); }
 static void memzero(int64_t p, int64_t size) { if (p) HIPOK(hipMemset((void*)p, 0, size)); }
 
+// Host-side snapshot of a device u32 array on the CALLER's stream (dst must be
+// pinned host memory). Async so the sampler thread never blocks the GIL on the
+// compute queue: a spin kernel there could run for the full timeout.
+static void copy_u32_async(int64_t dst, int64_t src, int64_t count, int64_t stream_i) {
+  HIPOK(hipMemcpyAsync((void*)dst, (const void*)src, (size_t)count * 4,
+                       hipMemcpyDeviceToHost, (hipStream_t)stream_i));
+}
+
 // single-process 2-GPU testing only: enable direct peer access (the runtime path uses IPC handles)
 static void enable_peer(int64_t peer) {
   hipError_t e = hipDeviceEnablePeerAccess((int)peer, 0);
@@ -156,12 +213,18 @@ static void enable_peer(int64_t peer) {
     throw std::runtime_error(std::string("enable_peer: ") + hipGetErrorString(e));
 }
 
+// spin_max: bounded peer-flag wait. 0 = compile-time default. A short value makes a
+// diverged handshake abort quickly (and log to the abort half of seq_ctrs) instead of
+// spinning ~4000s — used by the repro harness to turn a deadlock into a fast failure.
 static void all_reduce_mb(int64_t peer_scratch, int64_t my_scratch, int64_t peer_flags,
-                          int64_t my_flags, int64_t seq_ctrs, int64_t slot_stride16,
+                          int64_t my_flags, int64_t peer_done, int64_t my_done,
+                          int64_t seq_ctrs, int64_t slot_stride16,
                           int64_t inp, int64_t out, int64_t n_elem, int64_t dtype,
                           int64_t stream_i, int64_t nblocks, int64_t nthreads,
-                          int64_t drain, int64_t acq) {
+                          int64_t drain, int64_t acq, int64_t spin_max) {
   hipStream_t st = (hipStream_t)stream_i;
+  const unsigned long long spin = spin_max > 0 ? (unsigned long long)spin_max
+                                               : RADIANCE_SPIN_MAX;
   const int esize = (dtype == 2) ? 4 : 2;
   const long nbytes = (long)n_elem * esize;
   if (nbytes % 16 != 0) throw std::runtime_error("all_reduce: n_elem*esize not 16B-aligned");
@@ -175,8 +238,9 @@ static void all_reduce_mb(int64_t peer_scratch, int64_t my_scratch, int64_t peer
   if (nt > 1024) nt = 1024;
 #define L(T, LN) radiance_ar_mb<T, LN><<<nb, nt, 0, st>>>(                                 \
     (const int4*)inp, (int4*)peer_scratch, (const int4*)my_scratch, (int4*)out,           \
-    (unsigned*)peer_flags, (unsigned*)my_flags, (unsigned*)seq_ctrs, n16,                  \
-    (int)slot_stride16, (int)drain, (int)acq)
+    (unsigned*)peer_flags, (unsigned*)my_flags, (unsigned*)peer_done, (unsigned*)my_done, \
+    (unsigned*)seq_ctrs, n16,                                                             \
+    (int)slot_stride16, (int)drain, (int)acq, spin)
   if (dtype == 0) L(__hip_bfloat16, 8);
   else if (dtype == 1) L(__half, 8);
   else if (dtype == 2) L(float, 4);
@@ -189,7 +253,12 @@ PYBIND11_MODULE(radiance_ar_ext, m) {
   m.def("open_shared", &open_shared);
   m.def("free_shared", &free_shared);
   m.def("memzero", &memzero);
+  m.def("copy_u32_async", &copy_u32_async);
   m.def("enable_peer", &enable_peer);
-  m.def("all_reduce_mb", &all_reduce_mb);
+  m.def("all_reduce_mb", &all_reduce_mb, py::arg("peer_scratch"), py::arg("my_scratch"),
+        py::arg("peer_flags"), py::arg("my_flags"), py::arg("peer_done"), py::arg("my_done"),
+        py::arg("seq_ctrs"), py::arg("slot_stride16"), py::arg("inp"), py::arg("out"),
+        py::arg("n_elem"), py::arg("dtype"), py::arg("stream_i"), py::arg("nblocks"),
+        py::arg("nthreads"), py::arg("drain"), py::arg("acq"), py::arg("spin_max") = 0);
   m.attr("MAX_BLOCKS") = RADIANCE_MAX_BLOCKS;
 }

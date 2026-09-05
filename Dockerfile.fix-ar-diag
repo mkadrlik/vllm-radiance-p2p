@@ -1,0 +1,18 @@
+# Diagnostic overlay on :fix-ar for the serving-time (first-decode) wedge.
+# Adds: RADIANCE_AR_DIAG sampler (seq/flag trajectory + spin-abort log) and a
+# device-side spin-abort counter in radiance_ar_ext (kernel records the seq it
+# gave up waiting on, at seq_ctrs[MAX_BLOCKS + block]). py-spy for stack dumps.
+#
+#   sudo -n -u mkadrlik docker build -f Dockerfile.fix-ar-diag -t vllm-radiance-gfx1100:fix-ar-diag .
+FROM vllm-radiance-gfx1100:fix-ar
+
+COPY build/patches/radiance_ar_ext.hip /opt/patches/radiance_ar_ext.hip
+COPY build/radiance-modules/radiance_allreduce.py \
+     /opt/vllm/lib/python3.12/site-packages/radiance_allreduce.py
+
+RUN set -eu; INC=$(python -m pybind11 --includes); \
+    B="-O3 -std=c++17 -fPIC -shared --offload-arch=gfx1100 -Wno-unused-result"; \
+    hipcc $B $INC /opt/patches/radiance_ar_ext.hip \
+        -o /opt/vllm/lib/python3.12/site-packages/radiance_ar_ext.so && \
+    python -c "import ast; ast.parse(open('/opt/vllm/lib/python3.12/site-packages/radiance_allreduce.py').read()); print('parse OK')" && \
+    python -m pip install --quiet py-spy && py-spy --version && echo "diag image ready"
