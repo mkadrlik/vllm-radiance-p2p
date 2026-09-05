@@ -222,8 +222,7 @@ services:
       - ./data/awq-hf:/root/.cache/huggingface
       - ./data/awq-triton:/root/.triton:rw
     command: >
-      python3 -m vllm.entrypoints.openai.api_server
-      --model ${AWQ_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
+      ${AWQ_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-AWQ}
       --port ${AWQ_CONTAINER_PORT:-8001}
       --host 0.0.0.0
       --served-model-name ${AWQ_SERVED_MODEL_NAME:-Qwen2.5-0.5B-Instruct}
