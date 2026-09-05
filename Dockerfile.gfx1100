@@ -1,0 +1,103 @@
+# vllm-radiance gfx1100 (RDNA3 / RX 7900 XTX) adaptation layer.
+# FROM the prebuilt RDNA4-targeted radiance 0.5.7 stack (torch 2.11.0+rocm7.14 /
+# vllm 0.26.0 / aiter 0.1.17 / triton 3.6.0) and layers the recovered gfx1100
+# adaptation on top: gfx1100 logic patches, aiter GEMM config, moe/fp8 configs,
+# radiance runtime modules, and a fresh hipcc build of the HIP kernels
+# (--offload-arch=gfx1100). Recipe mirrors `docker history vllm-radiance:gfx1100`.
+#
+# Build (run as a user in the `docker` group):
+#   docker build -f Dockerfile.gfx1100 -t vllm-radiance-gfx1100-rebuild:test .
+
+FROM stilldeadcode/vllm-radiance:0.5.7
+
+ARG GFX_ARCH=gfx1100
+
+# --- gfx1100 arch env (base ships gfx1201 defaults; override them) ---
+ENV ROCM_PATH=/opt/rocm \
+    HIP_PATH=/opt/rocm \
+    HIP_PLATFORM=amd \
+    VLLM_TARGET_DEVICE=rocm \
+    PYTORCH_ROCM_ARCH=gfx1100 \
+    RADIANCE_GFX_ARCH=gfx1100 \
+    HIP_ARCHITECTURES=gfx1100 \
+    AMDGPU_TARGETS=gfx1100 \
+    GPU_ARCHS=gfx1100 \
+    SAFETENSORS_FAST_GPU=1 \
+    TOKENIZERS_PARALLELISM=false \
+    TRITON_CACHE_AUTOTUNING=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# --- radiance runtime modules -> site-packages ---
+COPY build/radiance-modules/radiance_amdsmi.py \
+     build/radiance-modules/radiance_amdsmi.pth \
+     build/radiance-modules/radiance_kernels.py \
+     build/radiance-modules/radiance_vit_attn.py \
+     build/radiance-modules/radiance_allreduce.py \
+     build/radiance-modules/radiance_draft.py \
+     build/radiance-modules/radiance_draft_gpu.py \
+     build/radiance-modules/radiance_router.py \
+     /opt/vllm/lib/python3.12/site-packages/
+
+# --- quantization / moe / aiter configs ---
+COPY build/fp8-configs/ /opt/vllm/lib/python3.12/site-packages/vllm/model_executor/layers/quantization/utils/configs/
+COPY build/moe-configs/ /opt/vllm/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
+COPY build/aiter-configs/gfx1100-GEMM-A8W8.json /opt/vllm/lib/python3.12/site-packages/aiter/ops/triton/configs/gemm/gfx1100-GEMM-A8W8.json
+
+# --- patch scripts + HIP sources ---
+COPY build/patches/patch_*.py \
+     build/patches/install_radiance_hooks.py \
+     build/patches/_patchlib.py \
+     /opt/patches/
+COPY build/patches/router_gemm.hip \
+     build/patches/radiance_ar_ext.hip \
+     build/patches/radiance_ar_quant_ext.hip \
+     /opt/patches/
+
+# --- apply gfx1100 logic patches (same list + order as the known-good build) ---
+RUN set -eu; cd /opt/patches; \
+    for p in patch_gfx1100 patch_router_gemm patch_unified_attention_lds \
+             patch_gdn_wmma install_radiance_hooks \
+             patch_unpad patch_mtp_mm_mask patch_mtp_loopbreak patch_qwen3_toolparse patch_from_json_filter \
+             patch_dynamo_metrics; do \
+      echo "== applying $p =="; python "$p.py"; \
+    done; \
+    python -c "import ast,glob; [ast.parse(open(f).read()) for f in glob.glob('/opt/vllm/lib/python3.12/site-packages/radiance_*.py')]; print('radiance modules parse OK')"
+
+# --- compile HIP kernels for gfx1100 (fp8 quant_ext skipped, RDNA3 has no fp8) ---
+RUN set -eu; INC=$(python -m pybind11 --includes); \
+    B="-O3 -std=c++17 -fPIC -shared --offload-arch=${GFX_ARCH} -Wno-unused-result"; \
+    hipcc $B -DTEMPORAL $INC /opt/patches/router_gemm.hip \
+        -o /opt/vllm/lib/python3.12/site-packages/router_gemm.so && \
+    hipcc $B $INC /opt/patches/radiance_ar_ext.hip \
+        -o /opt/vllm/lib/python3.12/site-packages/radiance_ar_ext.so && \
+    test -f /opt/vllm/lib/python3.12/site-packages/router_gemm.so && \
+    test -f /opt/vllm/lib/python3.12/site-packages/radiance_ar_ext.so && \
+    echo "radiance HIP kernels built (${GFX_ARCH}; fp8 quant_ext skipped)"
+
+# --- radiance runtime defaults (same as known-good image history) ---
+ENV RADIANCE_PRESHUFFLE=0 \
+    RADIANCE_ATTN_TUNE=1 \
+    RADIANCE_FUSE_RMS_QUANT=0 \
+    RADIANCE_GDN_WMMA=1 \
+    RADIANCE_VIT_FLASH=0 \
+    RADIANCE_FAST_REDUCE=1 \
+    RADIANCE_AR_MAX_KB=32768 \
+    RADIANCE_AR_QUANT=0 \
+    RADIANCE_AR_QUANT_MIN_KB=128 \
+    RADIANCE_DYNAMIC_DRAFT=1 \
+    RADIANCE_DRAFT_SCHEDULE=1:8,2:7,4:6,8:5,16:4 \
+    RADIANCE_DRAFT_TAU=0.35 \
+    RADIANCE_MOE_ROUTER=1 \
+    RADIANCE_RUN_BWTEST=1 \
+    RADIANCE_VERSION=0.5.7
+
+# --- verify stack versions (mirrors known-good image step 13) ---
+RUN WANT_VLLM=0.26.0 WANT_AITER=0.1.17 \
+    python -c 'import os, torch, vllm._C, amdsmi, importlib.metadata as m; v, a = m.version("vllm"), m.version("amd-aiter"); assert v.startswith(os.environ["WANT_VLLM"]), "vllm wheel reports " + v; assert a.startswith(os.environ["WANT_AITER"]), "aiter wheel reports " + a; print("stack OK | vllm", v, "| torch", torch.__version__, "| aiter", a, "| torchvision", m.version("torchvision"), "| triton", m.version("triton"))'
+
+# --- preamble + entrypoint (base already carries both; refresh from repo and re-chmod) ---
+COPY build/radiance_preamble.py /opt/radiance_preamble.py
+COPY build/radiance_entrypoint.sh /opt/radiance_entrypoint.sh
+RUN chmod +x /opt/radiance_entrypoint.sh
+
+ENTRYPOINT ["/opt/radiance_entrypoint.sh"]
