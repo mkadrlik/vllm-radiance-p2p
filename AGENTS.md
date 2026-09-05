@@ -4,12 +4,44 @@
 
 This repository documents the deployment and troubleshooting of vLLM with Radiance custom fork for tensor parallel (TP2) P2P on AMD RDNA3 GPUs (RX 7900 XTX, gfx1100).
 
-## gfx1100 image status & build (2026-08-12)
+## Running it (end-user path)
 
-**TL;DR:** the repo `:latest` is the working gfx1100 image (retagged 2026-08-12 from
-`vllm-radiance:gfx1100` and pushed to `ghcr.io/mkadrlik/vllm-radiance-p2p:latest` +
-`mkadrlik/vllm-radiance-p2p:latest` (private registry), digest
-`sha256:6253c8e6cf9c...`). The repo `Dockerfile` does **NOT** build gfx1100.
+The supported way to spin up an instance is `docker compose` with a prebuilt
+image — no build step:
+
+1. `cp .env.example .env` and set `HF_TOKEN` (the file documents every variable
+   and its default; all others are optional).
+2. `docker compose --profile radiance-27b up -d` (or `radiance-35b` / `awq`).
+3. First boot compiles kernels for 20–30 min; the healthcheck `start_period`
+   (1800 s) accounts for it. Caches persist under `./data/`.
+4. `curl http://localhost:${VLLM_HOST_PORT:-13313}/v1/models` to verify.
+
+Image references live in the compose file, not in your `.env` unless you
+override them:
+
+- radiance profiles → `${RADIANCE_IMAGE:-ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100}`
+  (pulled; **never built** — the compose deliberately has no `build:` key for
+  them)
+- `awq` profile → built locally from `Dockerfile.awq`, tagged
+  `${AWQ_IMAGE:-vllm-radiance-p2p-awq:latest}` (base is the public
+  `vllm/vllm-openai-rocm:v0.24.0`, so this build is safe on gfx1100)
+
+To serve a different model on the radiance profiles, edit the `command:` block
+of the relevant service in `docker-compose.yml` (model repo id +
+`--served-model-name`); everything else in `command:` is tuned and should stay
+as-is unless you know why (see *Common Pitfalls*).
+
+## gfx1100 image status & build (updated 2026-09-04)
+
+**TL;DR:** the verified gfx1100 image is published as
+`ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100` (digest `sha256:6253c8e6cf9c...`),
+from the known-good local build `vllm-radiance:gfx1100`. **Pin that tag.**
+`:latest` currently points at the same image but is mutable and was clobbered
+once before; the `main-<sha>` tags are gfx1201-broken builds from the pre-fix
+CI. The reproducible build recipe now exists in-tree as `Dockerfile.gfx1100`
+(layering [`build/`](./build/) on the 0.5.7 stack) — but note it starts FROM
+`stilldeadcode/vllm-radiance:0.5.7`, whose wheels are gfx1201-targeted; see
+*gfx1100 build* below for what is and isn't reproducible.
 
 **⚠️ Do NOT run `docker compose build` or `docker build .`** — it rebuilds from the
 gfx1201 stilldeadcode base and **clobbers the `:latest` tag** with a broken image
@@ -28,10 +60,14 @@ pynccl init with `hipErrorInvalidImage` (`arch check FAIL 0/2 gfx1201`; the
 7.14 source build** with `ARG GFX_ARCH=gfx1100` (torch/triton/aiter 0.1.17/vllm 0.26.0 wheels
 for gfx1100) plus the recovered patch layer. Its wheels are NOT recoverable from the image.
 
-**To build for gfx1100 (reproducible source build, not yet automated):** the complete gfx1100
+**To build for gfx1100 (recipe in-tree: `Dockerfile.gfx1100`):** the complete gfx1100
 adaptation is in `build/` (patches/, radiance-modules/, aiter-configs/, moe-configs/,
 fp8-configs/, radiance_preamble.py, radiance_entrypoint.sh), recovered from the working
-image. Reconstructing the build:
+image. `Dockerfile.gfx1100` layers it on `stilldeadcode/vllm-radiance:0.5.7` and
+compiles the HIP kernels for gfx1100 — this reproduces the patch layer. Caveat: the
+0.5.7 base's own wheels have drifted to gfx1201 targets, so if the patch step anchors
+fail (`patch_gfx1100.py` reports `anchor matched 0x`), you need the full source
+pipeline instead:
 1. Start from a ROCm 7.14 multi-arch base (`GFX_ARCH=gfx1100`), NOT the drifted
    stilldeadcode 0.5.7 prebuilt.
 2. Build/install the source wheels for gfx1100: `PYTORCH_ROCM_ARCH=gfx1100

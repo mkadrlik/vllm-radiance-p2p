@@ -101,10 +101,12 @@ curl http://localhost:13313/v1/chat/completions \
   image yet**. The compose file therefore has no `build:` for the radiance
   profiles — they always use the prebuilt image.
 
-The complete gfx1100 adaptation (patches, HIP kernels, AITER configs,
-entrypoint) is recovered from the working image and the reproducible source
-build is documented in [AGENTS.md](./AGENTS.md) → *gfx1100 build*. Until that
-build is automated, run the prebuilt `:gfx1100` image.
+The complete gfx1100 adaptation (patches, HIP kernel sources, AITER configs,
+entrypoint) is in-tree under [`build/`](./build/) with the layering recipe in
+`Dockerfile.gfx1100`. It reproduces the patch layer on the 0.5.7 stack; the
+full source-wheel pipeline (needed if patch anchors fail) is documented in
+[AGENTS.md](./AGENTS.md) → *gfx1100 build*. Until you've verified a rebuild
+end-to-end, run the prebuilt `:gfx1100` image.
 
 ## Environment variables
 
@@ -161,6 +163,8 @@ The 27B profile needs it because it fits; the 35B profile caps at 32k.
 .
 ├── docker-compose.yml      # All profiles in one file
 ├── .env.example            # Copy to .env and set HF_TOKEN
+├── Dockerfile.gfx1100      # gfx1100 adaptation layer build (advanced)
+├── build/                  # gfx1100 source-build inputs (patches, HIP kernels, configs)
 ├── Dockerfile.awq          # AWQ build (awq profile only)
 ├── Dockerfile              # ⚠️ broken for gfx1100 (drifted base) — see above
 ├── data/                   # All caches (gitignored, created on first run)

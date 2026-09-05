@@ -1,0 +1,12 @@
+.git
+data
+Dockerfile
+Dockerfile.awq
+Dockerfile.gfx1100
+docker-compose.yml
+.env.example
+.env
+README.md
+AGENTS.md
+scripts
+.gitea
