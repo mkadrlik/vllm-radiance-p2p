@@ -48,6 +48,12 @@ class RadianceAllreduce:
     """Drop-in for vLLM's ca_comm (CustomAllreduce). Same public surface:
     `disabled`, `should_custom_ar(inp)`, `custom_all_reduce(inp)`, `capture()`."""
 
+    # Set by install_custom_ar when RADIANCE_AR_DIAG=1: called for every EAGER
+    # all_reduce that falls through to RCCL, with the input tensor. The inventory
+    # (site, nbytes) -> count is dumped per rank so the two ranks' eager AR
+    # sequences can be diffed to find a divergent call site.
+    _site_log = None
+
     def __init__(self, group, device):
         self.disabled = True
         self.group = group
@@ -368,9 +374,47 @@ def install_custom_ar():
             out = rc.custom_all_reduce(input_)
             if out is not None:
                 return out
+        if RadianceAllreduce._site_log is not None:
+            RadianceAllreduce._site_log(input_)
         return _orig_all_reduce(self, input_)
 
     CudaCommunicator.__init__ = _patched_init
     CudaCommunicator.all_reduce = _patched_all_reduce
     CudaCommunicator._radiance_ar_patched = True
+    if _DIAG:
+        import collections
+        import threading as _th
+        sites = collections.Counter()
+        lock = _th.Lock()
+
+        def _site_log(inp):
+            # eager AR falling through to RCCL: record (call site, size). Divergent
+            # counts between ranks identify the asymmetric call.
+            try:
+                import traceback
+                st = traceback.extract_stack()
+                site = "?"
+                for fr in reversed(st[:-2]):
+                    if "radiance_allreduce" not in fr.filename and "vllm" in fr.filename:
+                        site = f"{fr.filename.rsplit('/',1)[-1]}:{fr.lineno}"
+                        break
+                with lock:
+                    sites[(site, inp.numel() * inp.element_size())] += 1
+            except Exception:
+                pass
+
+        RadianceAllreduce._site_log = _site_log
+
+        def _dump():
+            last = {}
+            while True:
+                _th.Event().wait(20.0)
+                with lock:
+                    snap = dict(sites)
+                changed = {k: v for k, v in snap.items() if last.get(k) != v}
+                if changed:
+                    _diag("EAGER-SITES " + " ".join(
+                        f"{s}/{n}B x{c}" for (s, n), c in sorted(changed.items())))
+                    last = snap
+        _th.Thread(target=_dump, daemon=True).start()
     _log("fast-reduce hook armed (RADIANCE_FAST_REDUCE=1, all_reduce wrap)")
