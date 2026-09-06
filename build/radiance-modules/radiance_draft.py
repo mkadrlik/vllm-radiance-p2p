@@ -104,17 +104,6 @@ def _install_drafter_hooks():
         packed = torch.empty(2, B, device=logits.device)
         gpu.capture_gpu(logits, packed[0], sc)
         packed[1] = draft_token_ids.to(torch.float32)
-        # TP SYMMETRY (fixes the FAST_REDUCE replay wedge): the top-1 confidence
-        # is computed from this rank's SHARDED logits, so cum-product vs TAU can
-        # differ per rank -> _radiance_stop fires at different slots -> ranks
-        # replay the drafter graph a DIFFERENT number of times -> the custom AR
-        # seq counters desync and both ranks spin on each other's flag. MIN-
-        # reduce the confidence across the TP group so every rank makes the
-        # identical decision (conservative: lower conf stops no later than any
-        # rank would alone; output stays lossless via the unchanged verifier).
-        # The all_reduce is itself symmetric: both ranks run this same loop slot.
-        if dist.is_initialized() and dist.get_world_size() > 1:
-            dist.all_reduce(packed[0], op=dist.ReduceOp.MIN)
         arr = packed.cpu().numpy()
         cfn = arr[0]; mtpn = arr[1].astype(np.int64)
         st = self._radiance_gate
