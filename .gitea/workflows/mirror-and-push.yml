@@ -39,24 +39,31 @@ jobs:
       - name: Mirror to GitHub (excluding .gitea folder)
         id: mirror
         run: |
-          # Delete .gitea folder from git history before pushing
-          git filter-branch -f --prune-empty --index-filter 'git rm -rf --cached --ignore-unmatch .gitea' HEAD 2>/dev/null || true
-          # Safety: .gitea must never reach GitHub (user directive)
-          if git ls-tree -r --name-only HEAD | grep -q '^\.gitea/'; then
-            echo "ERROR: .gitea still present after filter-branch; aborting"
-            exit 1
-          fi
+          # One tree-snapshot commit on top of GitHub main, .gitea excluded.
+          # (Old approach ran git filter-branch over all history; after the
+          # 2026-09-06 history reconciliation GitHub's own merged commits are
+          # ancestors of Gitea main, and rewriting them broke the PR
+          # merge-base -> permanently "dirty" PRs. Snapshot commits are always
+          # fast-forwardable and the PR diff is exactly the content change.)
           git fetch github main
-          # Skip if content already mirrored (filter-branch rewrites SHAs, so compare content)
-          if git diff --quiet github/main HEAD; then
+          git worktree remove --force /tmp/ghmirror 2>/dev/null || true
+          rm -rf /tmp/ghmirror
+          git worktree add -f --detach /tmp/ghmirror github/main
+          git -C /tmp/ghmirror rm -r --quiet --ignore-unmatch . >/dev/null || true
+          git archive HEAD | tar -x -C /tmp/ghmirror --exclude='.gitea'
+          git -C /tmp/ghmirror config user.name "Gitea Actions"
+          git -C /tmp/ghmirror config user.email "actions@gitea.local"
+          git -C /tmp/ghmirror add -A
+          if git -C /tmp/ghmirror diff --cached --quiet; then
             echo "GitHub main already in sync; nothing to do"
             echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "pushed=true" >> "$GITHUB_OUTPUT"
+          git -C /tmp/ghmirror commit -m "mirror: sync from Gitea $(git rev-parse --short HEAD)"
           # main is branch-protected (no force-push) -> push to unprotected sync branch instead
-          git -c credential.helper=none push github HEAD:refs/heads/mirror-sync --force
-          git -c credential.helper=none push github --force --tags
+          SHA=$(git -C /tmp/ghmirror rev-parse HEAD)
+          git -c credential.helper=none push github ${SHA}:refs/heads/mirror-sync --force
 
       - name: Open PR for mirror sync
         if: steps.mirror.outputs.pushed == 'true'
