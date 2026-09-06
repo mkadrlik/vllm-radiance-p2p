@@ -69,6 +69,51 @@ class, reproduced on demand.
 
 Unit gate check: `scripts/test_ar_capture_gate.py` (6/6 PASS).
 
+## Serving-time regression (found by live A/B, 2026-09-05, t_e12d6d90)
+
+The capture gate fixed startup, but `RADIANCE_FAST_REDUCE=1` on `:fix-ar` still
+kills the engine on the FIRST decode step: stream opens, `sample_tokens` RPC
+times out at 300 s, EngineDeadError, every later request 500s. bs=1,
+kv_cache_usage 0.045 — a plain decode replay wedged.
+
+Instrumented diagnosis (image `:fix-ar-diag`: device-side spin-abort log +
+side-stream seq/flag/done sampler + py-spy): both ranks' main threads block in
+`radiance_draft._prepare_match_gpu` (first device sync of the step) while both
+GPUs spin. The abort log shows both ranks at the SAME seq on ALL blocks with
+`my_flags == seq` — the data handshake completed, the peer's kernel never
+finished. This is a mutual-spin livelock inside graph replay, not a seq
+divergence and not eager-path asymmetry.
+
+Protocol variants tried and rejected with evidence:
+
+| Variant | Harness (toy, torchrun) | Serving (real model) |
+|---|---|---|
+| V0 capture-gate only (`:fix-ar`, 95c9424) | 4/4 PASS | wedge at first decode, seq≈132 |
+| V1 wire-flush (`s_waitcnt vmcnt+excnt` after flag store) | ALL PASS (once) | wedge at seq 3, flags invisible until timeout |
+| V2 + done-guard, fixed partition, `atomicMax` peer posts | t4 FAIL/hang (rc=137) — remote RMW atomics stall on gfx1100 PCIe | not run |
+| V3 + flag read-back flush (posted-write ordering) | wholesale corruption (every element differs) | not run |
+
+Root problem: the one-shot kernel's correctness depends on both ranks' spin
+loops observing each other's flags with bounded latency. On this platform
+(RDNA3 + consumer PCIe, uncached fine-grained BAR, `GPU_MAX_HW_QUEUES=1`)
+posted peer writes are not observably on the wire before the writer spins, and
+non-posted RMW atomics stall outright. Inside a captured graph there is no
+recovery path — a timed-out spin silently corrupts the reduction, so even the
+"bounded spin + fallback" direction cannot be made safe without protocol
+support the hardware does not give (doorbell flush / programmatic completion).
+vLLM's own CustomAllreduce avoids this by registering graph buffers and using
+a different handshake on NVLink-class platforms; it is inert on ROCm for a
+reason.
+
+**Decision: `RADIANCE_FAST_REDUCE` defaults to 0** (this commit): the env-gate
+in `install_custom_ar`, the banner in `radiance_preamble.py`, and the
+`Dockerfile.gfx1100` ENV all flip to off. Production compose already runs 0.
+The capture-gate fix (95c9424) stays — it is strictly better than pre-fix —
+but the fast path is inert by default until someone proves a replay-safe
+handshake on real gfx1100 PCIe with the full model. Decode baseline stays
+20.4 tok/s on RCCL; the fast kernel's theoretical win does not justify an
+engine that dies on request one.
+
 ## Deploy vehicle
 
 `Dockerfile.fix-ar` — overlay of the fixed `radiance_allreduce.py` onto the known-good

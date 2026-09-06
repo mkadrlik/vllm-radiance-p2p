@@ -132,7 +132,7 @@ def section_opts():
         ("RADIANCE_GDN_WMMA",       "1", "gated-delta-net KKt gram + triangular solve on the fp16 matrix cores (vs fp32 scalar path)"),
         ("RADIANCE_VIT_FLASH",      "1", "native head_dim-72 flash attention for the vision encoder (multimodal)"),
         ("RADIANCE_FUSE_RMS_QUANT", "1", "fold group-FP8 quant into the RMSNorm epilogue"),
-        ("RADIANCE_FAST_REDUCE",    "1", "P2P one-shot all-reduce for TP=2, byte-identical to RCCL"),
+        ("RADIANCE_FAST_REDUCE",    "0", "P2P one-shot all-reduce for TP=2 (OFF: wedges at first decode replay, see docs/fast-reduce-mtp-deadlock.md)"),
         ("RADIANCE_AR_QUANT",       "1", "fp8 all-reduce payload for large messages (on; not RCCL-identical)"),
         ("RADIANCE_DYNAMIC_DRAFT",  "1", "per-request MTP draft-depth controller (needs speculative mtp)"),
         ("RADIANCE_MOE_ROUTER",     "1", "custom bf16 MoE-gate GEMM for the n in [6,16] band (fine-grained MoE, e.g. Qwen3.6-35B-A3B)"),
