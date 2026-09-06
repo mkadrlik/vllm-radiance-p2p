@@ -13,9 +13,11 @@ docker run --rm --entrypoint bash \
   -e ROCR_VISIBLE_DEVICES=1,2 \
   -e HIP_VISIBLE_DEVICES=0,1 \
   -e GPU_MAX_HW_QUEUES=1 \
+  -e NCCL_PROTO=Simple \
+  -e NCCL_DEBUG=WARN \
   -v "$REPO/microbench:/mnt/mb" \
   "$IMG" -lc "
 set -eu
 cd /mnt/mb
-timeout -s KILL 900 torchrun --nproc_per_node=2 --master_port=29617 phase0_bench.py $*
+timeout -s KILL 1500 torchrun --nproc_per_node=2 --master_port=29618 phase0_bench.py $*
 "
