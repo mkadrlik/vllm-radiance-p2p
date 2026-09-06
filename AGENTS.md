@@ -103,6 +103,54 @@ find <cache> -name '*.json' -size 0 -delete
 **Reason:** Draft acceptance low on this model family
 **Note:** Community 60-95 t/s MTP numbers are llama.cpp + Q4 GGUF
 
+### Qwen3.8-27B W8A8 → AWQ-INT4 (2026-09-05/06): quant is not the single-stream lever
+
+Full write-up: `docs/qwen38-27b-quant-comparison.md`. Headlines:
+- TP2 decode step (~131 ms) is all-reduce + launch bound, not bandwidth bound.
+  Halving weight bytes (39.4→21.0 GB) moved 20.4 → 23.8–28.9 t/s (+18-25%),
+  NOT the hoped-for 2×. The 2× is real only in aggregate/batch terms
+  (~380 t/s @ batch 32) and KV pool (+80%, 163,840 tokens).
+- MTP (`qwen3_5_mtp` depth 2) survives AWQ: rep ships MTP tensors, acceptance
+  65-74%, length ~2.3 under load. `--speculative-config` model path must be
+  edited TOGETHER with `--model` (two occurrences in the compose).
+- Same-family 9B on ONE card = 80+ t/s. On gfx1100, TP is the tax; small
+  models belong on TP1, TP2 is for capacity/context, not latency.
+
+### vLLM 0.26 TP1 decode cliff at ≥5 concurrent streams (gfx1100)
+
+`docs/vllm-9b-concurrency-cliff.md` + upstream draft `docs/vllm-decode-cliff-issue.md`.
+Aggregate throughput DROPS at 5+ simultaneous decodes (197→69 t/s); step time
+plateaus ~73 ms independent of batch. Reproduced through graphs/eager,
+async/sync, prefix-cache on/off, thermal-clean, contention-free. Mitigation:
+`--max-num-seqs 4`. The TP2 sibling shows no cliff → TP1/uniproc path.
+
+### Vision enablement OOMs at boot unless mm limits AND max_pixels are capped
+
+`docs/vllm-vision-gfx1100.md`. Dummy multimodal profiling runs the ViT at the
+processor's unbounded default max size → `OutOfMemoryError: Tried to allocate
+256.00 GiB` in SDPA, silent crash-loop with NO traceback in container logs.
+Fix: `--limit-mm-per-prompt '{"image":4,"video":0}'` + `--mm-processor-kwargs
+'{"max_pixels":1003520}'`. Debug pattern for silent EngineCore loops: one-shot
+`docker run --rm -e PYTHONFAULTHANDLER=1` with output redirected to a mounted
+file.
+
+### Gateway kwargs stripping — set thinking-off SERVER-side
+
+OpenAI-proxy gateways (ContextForge-class) drop per-request
+`chat_template_kwargs` silently AND strip `reasoning` from responses.
+`--default-chat-template-kwargs '{"enable_thinking": false}'` on the server is
+the only reliable off-switch; observed cost otherwise: 50 completion tokens
+for a 4-token answer + `\n\n` residue in `content`.
+
+### Bench traps on this stack
+
+- Counting only `content` deltas against a reasoning model under-reports
+  decode 4-6× (bench read 4.4 t/s while engine generated 17.9 t/s).
+- `rocm-smi --showuse 99%` + invisible owner = another agent's live stream.
+  Check `vllm:num_requests_running` before/after any measurement.
+- `scripts/batch_curve.py` is the corrected harness (content+reasoning,
+  gate-released parallel clients).
+
 ## Deployment Patterns
 
 ### Radiance Image (27B/35B Quark)
