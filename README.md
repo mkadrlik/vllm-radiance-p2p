@@ -13,11 +13,29 @@ Prebuilt Docker image + `docker-compose.yml` for serving quantized Qwen models o
 **2× AMD RX 7900 XTX (gfx1100)** with tensor-parallel 2 and PCIe P2P, or any AWQ
 model on a single GPU. No CUDA, no NVIDIA.
 
-| Profile | Model | GPUs | Port | Quant |
-|---------|-------|------|------|-------|
-| `radiance-27b` | Qwen3.6-27B-Quark-W8A8 | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 |
-| `radiance-35b` | Qwen3.6-35B-A3B-Quark | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 |
-| `awq` | Any AWQ model (configurable) | 1 GPU | 13309 | AWQ |
+| Profile | Model | GPUs | Port | Quant | Status |
+|---------|-------|------|------|-------|--------|
+| `qwen38-27b` | Qwen3.8-27B-AWQ-INT4 (MTP spec-decode) | 2× RX 7900 XTX (TP2) | 13305 | compressed-tensors W4 g32 | **production worker** |
+| `ornith-9b` | Ornith-1.5-9B-AWQ-INT4 (vision-capable) | 1× RX 7900 XTX (TP1) | 13318 | compressed-tensors W4 g32 | **production facade+vision** |
+| `radiance-27b` | Qwen3.6-27B-Quark-W8A8 | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 | legacy |
+| `radiance-35b` | Qwen3.6-35B-A3B-Quark | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 | legacy |
+| `awq` | Any AWQ model (configurable) | 1 GPU | 13309 | AWQ | generic template |
+
+The two production profiles mirror the live big-chungus deployment
+(`docker/vllm-rocm-main/docker-compose-{27b,9b}.yml`) — same flags, same env.
+Findings that shaped them:
+
+- **W8A8 → AWQ on the 27B:** single-stream +18-25% (not 2× — TP2 all-reduce,
+  not bandwidth, is the floor), batch throughput ~2×, KV pool +80%.
+  Data: [`docs/qwen38-27b-quant-comparison.md`](docs/qwen38-27b-quant-comparison.md)
+- **TP1 concurrency cliff:** ≥5 simultaneous decode streams collapse vLLM 0.26
+  on gfx1100 → `--max-num-seqs 4` cap. [`docs/vllm-9b-concurrency-cliff.md`](docs/vllm-9b-concurrency-cliff.md)
+- **Vision on gfx1100:** requires `--limit-mm-per-prompt '{"image":4,"video":0}'`
+  **and** `--mm-processor-kwargs '{"max_pixels":1003520}'` or the ViT dummy
+  profile OOMs at 256 GB. [`docs/vllm-vision-gfx1100.md`](docs/vllm-vision-gfx1100.md)
+- **`--default-chat-template-kwargs '{"enable_thinking": false}'`** on both:
+  gateways that strip per-request `chat_template_kwargs` otherwise make every
+  call pay hidden thinking tokens.
 
 ## Requirements
 
@@ -46,6 +64,10 @@ memory limits — see [Environment variables](#environment-variables).
 ### 2. Pick a profile and start
 
 ```bash
+docker compose --profile qwen38-27b up -d     # Qwen3.8-27B AWQ-INT4, TP2 + MTP (:13305) ← current prod
+# or
+docker compose --profile ornith-9b up -d      # Ornith-1.5-9B AWQ-INT4, TP1 + vision (:13318) ← current prod
+# or
 docker compose --profile radiance-27b up -d   # Qwen3.6-27B Quark, TP2
 # or
 docker compose --profile radiance-35b up -d   # Qwen3.6-35B-A3B Quark, TP2
@@ -175,11 +197,23 @@ The 27B profile needs it because it fits; the 35B profile caps at 32k.
 
 ## Performance
 
-| Config | Decode | Notes |
-|--------|--------|-------|
-| 27B Quark (CUDA-graph) | ~22 tok/s | tg128, MTP off |
-| 35B-A3B Quark (CUDA-graph) | ~19 tok/s | tg128, MTP off |
-| AWQ (eager) | varies | Depends on model size |
+Measured on 3× RX 7900 XTX, radiance 0.5.7 / vLLM 0.26.0, thinking disabled
+server-side, MTP depth 2 where noted. Repro: `scripts/batch_curve.py`.
+
+| Config | Single-stream | Batch curve | KV pool | Notes |
+|--------|--------------|-------------|---------|-------|
+| Qwen3.8-27B W8A8 TP2 (radiance A/B) | 20.4 t/s | — | ~90K tok | superseded 2026-09-05 |
+| **Qwen3.8-27B AWQ TP2 + MTP** | **23.8–28.9 t/s** | 12.2@8 · 10.3@32 → **~380 agg** | **163K tok** | prod worker; step time ~131 ms is TP2 AR-bound |
+| **Ornith-1.5-9B AWQ TP1** | **80–86 t/s** | 49.5@4 (capped; ≥5 cliffs — see docs) | **274K tok + vision** | prod facade; single card, zero AR |
+| 27B Quark (CUDA-graph) | ~22 tok/s | tg128, MTP off | | legacy profile |
+| 35B-A3B Quark (CUDA-graph) | ~19 tok/s | tg128, MTP off | | legacy profile |
+| AWQ (eager) | varies | Depends on model size | | generic template |
+
+The 27B single-stream number is dominated by the TP2 all-reduce floor (one-shot
+custom AR is NOT VIABLE on RDNA3 consumer PCIe — see
+`fix/fast-reduce-mtp-capture` PR + the flush/LL protocol spec). Quant choice
+buys the bandwidth residual only. For single-stream latency on this silicon:
+run small models TP1 (9B = 4× the 27B's decode), reserve TP2 for capacity.
 
 ## Troubleshooting
 
