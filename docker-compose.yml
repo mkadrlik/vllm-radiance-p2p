@@ -5,10 +5,14 @@
 #   radiance-27b   Qwen3.6-27B-Quark-W8A8  (tensor-parallel 2, :13313)
 #   radiance-35b   Qwen3.6-35B-A3B-Quark    (tensor-parallel 2, :13313)
 #   awq            AWQ models via vllm (single GPU, :13309)
+#   qwen38-27b     Qwen3.8-27B AWQ-INT4 TP2 + MTP (:13305)   ← current prod worker engine
+#   ornith-9b      Ornith-1.5-9B AWQ-INT4 TP1 + vision (:13318) ← current prod facade/vision engine
 #
 # Setup (see README.md for details):
 #   cp .env.example .env   # then set HF_TOKEN
 #   docker compose --profile radiance-27b up -d   # pulls the prebuilt gfx1100 image
+#   docker compose --profile qwen38-27b up -d     # prod worker (radiance image, TP2)
+#   docker compose --profile ornith-9b up -d      # prod facade (radiance image, TP1 + vision)
 #
 # The radiance profiles use the prebuilt image from ghcr.io — there is NO build
 # step for them, deliberately: the gfx1100 image is produced by Dockerfile.gfx1100
@@ -265,3 +269,228 @@ services:
         max-size: "10m"
         max-file: "2"
         tag: vllm-awq
+  # ── Qwen3.8-27B AWQ-INT4 TP2 + MTP (prod worker engine, :13305) ─────────
+  # Replaced the W8A8-INT8 config 2026-09-06. AWQ = same single-stream decode
+  # (~24-29 vs 20.4 t/s — TP2 all-reduce dominates, NOT bandwidth) but ~2x
+  # batch throughput (~380 t/s aggregate @32) and +80% KV pool (163K tok).
+  # See docs/qwen38-27b-quant-comparison.md for the full W8A8-vs-AWQ findings.
+  qwen38-27b:
+    profiles: ["qwen38-27b"]
+    image: ${RADIANCE_IMAGE:-ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100}
+    container_name: vllm-27b-gfx1100
+    restart: unless-stopped
+    user: root
+    shm_size: ${VLLM_SHM_SIZE:-16G}
+    privileged: true
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    ports:
+      - "13305:13305"
+    environment:
+      TZ: America/Chicago
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HSA_SIGNAL_TIMEOUT: "-1"
+      ROCR_VISIBLE_DEVICES: "${QWEN38_27B_ROCR:-1,2}"
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_API_KEY: ${VLLM_27B_API_KEY:-}
+      VLLM_ROCM_USE_AITER: "1"
+      VLLM_ROCM_USE_AITER_LINEAR: "1"
+      VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION: "0"
+      VLLM_ROCM_USE_AITER_MHA: "0"
+      VLLM_ROCM_USE_AITER_MLA: "0"
+      VLLM_ROCM_USE_AITER_MOE: "0"
+      VLLM_ROCM_USE_AITER_FP8BMM: "0"
+      VLLM_ROCM_USE_AITER_RMSNORM: "0"
+      RADIANCE_GDN_WMMA: "0"
+      RADIANCE_MOE_ROUTER: "1"
+      RADIANCE_DYNAMIC_DRAFT: "1"
+      RADIANCE_FAST_REDUCE: "0"
+      RADIANCE_RUN_BWTEST: "0"
+      RADIANCE_NUMA_BIND: auto
+      RADIANCE_AR_QUANT: "0"
+      RADIANCE_PRESHUFFLE: "0"
+      RADIANCE_FUSE_RMS_QUANT: "0"
+      RADIANCE_VIT_FLASH: "0"
+      NCCL_PROTO: Simple
+      NCCL_CUMEM_ENABLE: "0"
+      GPU_MAX_HW_QUEUES: "1"
+      NCCL_DEBUG: WARN
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      VLLM_LOGGING_LEVEL: INFO
+      VLLM_CACHE_ROOT: /cache/vllm
+      TRITON_CACHE_DIR: /cache/triton
+      AITER_ROOT_DIR: /cache/aiter
+      TORCHINDUCTOR_CACHE_DIR: /cache/inductor
+      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    command:
+      - "cyankiwi/Qwen3.8-27B-AWQ-INT4"
+      - --served-model-name
+      - Qwen3.8-27B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "13305"
+      - --tensor-parallel-size
+      - "2"
+      - --pipeline-parallel-size
+      - "1"
+      - --gpu-memory-utilization
+      - "0.85"
+      - --kv-cache-memory-bytes
+      - "6148741120"
+      - --quantization
+      - compressed-tensors
+      - --max-model-len
+      - "131072"
+      - --max-num-batched-tokens
+      - "8192"
+      - --max-num-seqs
+      - "64"
+      - --dtype
+      - bfloat16
+      - --attention-backend
+      - ROCM_ATTN
+      - --enable-prefix-caching
+      - --no-async-scheduling
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_xml
+      - --reasoning-parser
+      - qwen3
+      - --language-model-only
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --trust-remote-code
+      - --speculative-config
+      - '{"method":"qwen3_5_mtp","model":"cyankiwi/Qwen3.8-27B-AWQ-INT4","num_speculative_tokens":2}'
+      - --compilation-config
+      - '{"cudagraph_capture_sizes":[1,2,4,8,16,32,64],"max_cudagraph_capture_size":64}'
+    volumes:
+      - ./data/cache:/root/.cache/huggingface:rw
+      - ./data/radiance-cache-27b-qwen38-awq:/cache:rw
+    group_add:
+      - video
+      - "105"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13305/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 2400s
+
+  # ── Ornith-1.5-9B AWQ-INT4 TP1 + vision (prod facade engine, :13318) ────
+  # Replaced llama.cpp facade-9b + qwen3vl-8b units 2026-09-06. Single card.
+  # max-num-seqs 4 is a DELIBERATE CAP: vLLM 0.26 has a decode cliff at >=5
+  # concurrent streams on TP1 gfx1100 (~73ms/step plateau, aggregate DROPS);
+  # docs/vllm-9b-concurrency-cliff.md has the repro + upstream issue draft.
+  # Vision requires BOTH limit-mm (video:0) AND max_pixels or the ViT dummy
+  # profile OOMs (256 GB alloc). See docs/vllm-vision-gfx1100.md.
+  ornith-9b:
+    profiles: ["ornith-9b"]
+    image: ${RADIANCE_IMAGE:-ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100}
+    container_name: vllm-9b-gfx1100
+    restart: unless-stopped
+    user: root
+    shm_size: 16G
+    privileged: true
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    ports:
+      - "13318:13318"
+    environment:
+      TZ: America/Chicago
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HSA_SIGNAL_TIMEOUT: "-1"
+      ROCR_VISIBLE_DEVICES: "${ORNITH_9B_ROCR:-0}"
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_API_KEY: ${VLLM_27B_API_KEY:-}
+      VLLM_ROCM_USE_AITER: "1"
+      VLLM_ROCM_USE_AITER_LINEAR: "1"
+      VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION: "0"
+      VLLM_ROCM_USE_AITER_MHA: "0"
+      VLLM_ROCM_USE_AITER_MLA: "0"
+      VLLM_ROCM_USE_AITER_MOE: "0"
+      VLLM_ROCM_USE_AITER_FP8BMM: "0"
+      VLLM_ROCM_USE_AITER_RMSNORM: "0"
+      RADIANCE_GDN_WMMA: "0"
+      RADIANCE_MOE_ROUTER: "1"
+      RADIANCE_DYNAMIC_DRAFT: "1"
+      RADIANCE_FAST_REDUCE: "0"
+      RADIANCE_RUN_BWTEST: "0"
+      RADIANCE_NUMA_BIND: auto
+      RADIANCE_AR_QUANT: "0"
+      RADIANCE_PRESHUFFLE: "0"
+      RADIANCE_FUSE_RMS_QUANT: "0"
+      RADIANCE_VIT_FLASH: "1"
+      NCCL_PROTO: Simple
+      NCCL_CUMEM_ENABLE: "0"
+      GPU_MAX_HW_QUEUES: "1"
+      NCCL_DEBUG: WARN
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      VLLM_LOGGING_LEVEL: INFO
+      VLLM_CACHE_ROOT: /cache/vllm
+      TRITON_CACHE_DIR: /cache/triton
+      AITER_ROOT_DIR: /cache/aiter
+      TORCHINDUCTOR_CACHE_DIR: /cache/inductor
+      TORCHINDUCTOR_COMPILE_THREADS: "4"
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    command:
+      - "cyankiwi/Ornith-1.5-9B-AWQ-INT4"
+      - --served-model-name
+      - Ornith-1.5-9B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "13318"
+      - --tensor-parallel-size
+      - "1"
+      - --gpu-memory-utilization
+      - "0.90"
+      - --quantization
+      - compressed-tensors
+      - --max-model-len
+      - "262144"
+      - --max-num-batched-tokens
+      - "8192"
+      - --limit-mm-per-prompt
+      - '{"image": 4, "video": 0}'
+      - --mm-processor-kwargs
+      - '{"max_pixels": 1003520}'
+      - --max-num-seqs
+      - "4"
+      - --dtype
+      - bfloat16
+      - --attention-backend
+      - ROCM_ATTN
+      - --enable-prefix-caching
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_xml
+      - --reasoning-parser
+      - qwen3
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      - --trust-remote-code
+    volumes:
+      - ./data/cache:/root/.cache/huggingface:rw
+      - ./data/radiance-cache-9b-ornith:/cache:rw
+    group_add:
+      - video
+      - "105"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13318/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 2400s
