@@ -85,6 +85,19 @@ __global__ void radiance_ar_mb(
   int4* ps = peer_base + (size_t)slot * slot_stride16;
   const int4* ms = my_base + (size_t)slot * slot_stride16;
 
+  // FIXED word partition: block b owns slot words [b*chunk16, (b+1)*chunk16),
+  // chunk16 = ceil(slot16/nb). The Python side guarantees nb is CONSTANT across
+  // all launches (fixed grid = max_nb; empty-range blocks still handshake), so a
+  // word range is written and read by the SAME block index on both ranks for
+  // every graph — that is what makes the per-block done guard sound. The old
+  // size-proportional grid+partition let one rank's block b write at launch s
+  // overlap the peer's block b'!=b read at s-2 when different-size graphs
+  // interleaved — done[b] missed b' and the slot corrupted silently
+  // (observed: t3/t4 mismatches with zero SPIN-ABORTs).
+  const int chunk16 = (slot_stride16 + nb - 1) / nb;
+  const int start = b * chunk16;
+  int end = start + chunk16; if (end > n16) end = n16;
+
   // slot-reuse guard: wait until the peer finished READING this slot at s-2.
   // Signed wrap-safe comparison; at steady state the peer is caught up and this
   // does not spin at all. One thread polls, the block syncs before pushing.
@@ -96,10 +109,6 @@ __global__ void radiance_ar_mb(
     }
   }
   __syncthreads();
-
-  const int w = (n16 + nb - 1) / nb;      // 16B words per block
-  const int start = b * w;
-  int end = start + w; if (end > n16) end = n16;
 
   // push chunk -> peer slot, 4x-unrolled for memory-level parallelism (PCIe saturation)
   {
@@ -166,10 +175,12 @@ __global__ void radiance_ar_mb(
     }
     for (; k < end; k += nt) out4[k] = vadd<T, LANES>(in4[k], ms[k]);
   }
-  // Signal the peer that slot (s&1) is fully READ: barrier-orders every thread's
-  // reduce loads, then tid0's release store publishes done[s] system-wide.
-  // Same wire-flush requirement as the data flag: spinners must not wait on a
-  // buffered done.
+  // Signal the peer that slot (s&1) is fully READ. __syncthreads() alone is an
+  // EXECUTION barrier — the other threads' vector loads may still be IN FLIGHT
+  // when it passes (this is what corrupted back-to-back replays: done posted
+  // early, peer overwrote the slot mid-read). Every wavefront must waitcnt its
+  // own vmcnt first; then tid0's release store + wire-flush publishes done[s].
+  asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
   __syncthreads();
   if (tid == 0) {
     store_sys_rel(&peer_done[b], s);
@@ -231,7 +242,9 @@ static void all_reduce_mb(int64_t peer_scratch, int64_t my_scratch, int64_t peer
   const int n16 = (int)(nbytes / 16);
   int nb = (int)nblocks;
   if (nb < 1) nb = 1;
-  if (nb > n16) nb = n16;
+  // NO clamp to n16: the grid size must be CONSTANT across launches or the fixed
+  // word partition + per-block done guard become unsound (see kernel comment).
+  // Tiny messages leave most blocks handshake-only, which is correct and cheap.
   if (nb > RADIANCE_MAX_BLOCKS) nb = RADIANCE_MAX_BLOCKS;
   int nt = (int)nthreads;
   if (nt < 64) nt = 64;

@@ -180,18 +180,22 @@ class RadianceAllreduce:
         st = torch.cuda.Stream()
         seq_h = torch.zeros(2 * self._maxb, dtype=torch.int32, pin_memory=True)
         flg_h = torch.zeros(self._maxb, dtype=torch.int32, pin_memory=True)
+        dn_h = torch.zeros(self._maxb, dtype=torch.int32, pin_memory=True)
         seq_p = self._seq.data_ptr()
         flg_p = self._flags
+        dn_p = self._done
         while not self._stop.wait(3.0):
             try:
                 sh = st.cuda_stream
                 self._ext.copy_u32_async(seq_h.data_ptr(), seq_p, 2 * self._maxb, sh)
                 self._ext.copy_u32_async(flg_h.data_ptr(), flg_p, self._maxb, sh)
+                self._ext.copy_u32_async(dn_h.data_ptr(), dn_p, self._maxb, sh)
                 ev = torch.cuda.Event()
                 ev.record(st)
                 ev.synchronize()
                 seq = seq_h.tolist()
                 flg = [x & 0xFFFFFFFF for x in flg_h.tolist()]
+                dn = [x & 0xFFFFFFFF for x in dn_h.tolist()]
             except Exception as e:
                 # capture on the device makes foreign-stream copies illegal
                 # (startup graph capture races this thread). Survive, keep sampling.
@@ -206,7 +210,7 @@ class RadianceAllreduce:
                 # clear = data-wait timeout; low 31 bits = the seq that gave up.
                 raw = " ".join(f"b{b}:0x{v:x}" for b, v in abort)
                 _diag(f"SPIN-ABORT {raw} — peer AR sequence diverged; "
-                      f"seq[0:8]={seq[:8]} my_flags[0:8]={flg[:8]}")
+                      f"seq[0:8]={seq[:8]} my_flags[0:8]={flg[:8]} my_done[0:8]={dn[:8]}")
                 return
             sig = (tuple(seq), tuple(flg))
             if sig == prev:
@@ -214,12 +218,13 @@ class RadianceAllreduce:
                 if stalls == 2:   # one quiet sample set -> log trajectory once
                     spin = [b for b in range(self._maxb) if seq[b] > flg[b]]
                     _diag(f"IDLE seq[0:8]={seq[:8]} my_flags[0:8]={flg[:8]} "
+                          f"my_done[0:8]={dn[:8]} "
                           f"spinning_blocks={spin} calls={self._calls} bakes={self._bakes}")
             else:
                 stalls = 0
                 moved = [b for b in range(self._maxb)
                          if prev is None or seq[b] != prev[0][b] or flg[b] != prev[1][b]]
-                _diag(f"TRAJ seq[0:8]={seq[:8]} my_flags[0:8]={flg[:8]} "
+                _diag(f"TRAJ seq[0:8]={seq[:8]} my_flags[0:8]={flg[:8]} my_done[0:8]={dn[:8]} "
                       f"moved={moved[:12]} calls={self._calls} bakes={self._bakes}")
                 prev = sig
 
@@ -265,16 +270,13 @@ class RadianceAllreduce:
         return inp.is_contiguous()
 
     def _nblocks(self, n16: int) -> int:
-        # PCIe saturates with few blocks; extra blocks only help the reduce. Scale with
-        # message size, clamped. Baked per-batch-size at cudagraph capture (n16 fixed).
-        nb = n16 // self.words_per_block
-        if nb < self.min_nb:
-            nb = self.min_nb
-        if nb > self.max_nb:
-            nb = self.max_nb
-        if nb > n16:
-            nb = max(1, n16)
-        return nb
+        # FIXED grid: every launch uses max_nb blocks regardless of message size.
+        # The kernel's fixed word partition (block b owns [b*chunk, (b+1)*chunk),
+        # chunk=slot16/nb) is only sound when nb is constant: a size-proportional
+        # grid makes block ranges shift between graphs, so one rank's write at
+        # launch s overlaps the peer's different-index read at s-2 and the
+        # per-block done guard misses it. Empty-range blocks just handshake.
+        return self.max_nb
 
     def _quant_ok(self, inp: torch.Tensor) -> bool:
         # fp8 path only for large (bandwidth-bound) bf16/fp16 messages that tile the scale group.
