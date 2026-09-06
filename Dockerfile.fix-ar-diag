@@ -1,7 +1,10 @@
 # Diagnostic overlay on :fix-ar for the serving-time (first-decode) wedge.
-# Adds: RADIANCE_AR_DIAG sampler (seq/flag trajectory + spin-abort log) and a
-# device-side spin-abort counter in radiance_ar_ext (kernel records the seq it
-# gave up waiting on, at seq_ctrs[MAX_BLOCKS + block]). py-spy for stack dumps.
+# NOTE (post-mortem): HEAD's radiance_allreduce.py/radiance_ar_ext.hip are the
+# V0 capture-gate files (fast path now default-OFF). The instrumented build
+# (RADIANCE_AR_DIAG sampler, device spin-abort log, RADIANCE_AR_SPIN_MAX knob,
+# py-spy) lives in git history at commits 0d3bba9..57cefe1; the built image
+# vllm-radiance-gfx1100:fix-ar-diag on big-chungus carries it. Rebuild from
+# those commits to reproduce the wedge instrumentation.
 #
 #   sudo -n -u mkadrlik docker build -f Dockerfile.fix-ar-diag -t vllm-radiance-gfx1100:fix-ar-diag .
 FROM vllm-radiance-gfx1100:fix-ar
