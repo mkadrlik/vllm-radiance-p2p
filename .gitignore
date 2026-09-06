@@ -18,6 +18,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# AWQ HF cache (model weights, regenerated)
-data/awq-hf/

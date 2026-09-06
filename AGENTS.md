@@ -4,34 +4,75 @@
 
 This repository documents the deployment and troubleshooting of vLLM with Radiance custom fork for tensor parallel (TP2) P2P on AMD RDNA3 GPUs (RX 7900 XTX, gfx1100).
 
-## gfx1100 image status & build (2026-08-12)
+## Running it (end-user path)
 
-**TL;DR:** the repo `:latest` is the working gfx1100 image (retagged 2026-08-12 from
-`vllm-radiance:gfx1100` and pushed to `ghcr.io/mkadrlik/vllm-radiance-p2p:latest` +
-`nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest`, digest
-`sha256:6253c8e6cf9c...`). The repo `Dockerfile` does **NOT** build gfx1100.
+The supported way to spin up an instance is `docker compose` with a prebuilt
+image — no build step:
 
-**⚠️ Do NOT run `docker compose build` or `docker build .`** — it rebuilds from the
-gfx1201 stilldeadcode base and **clobbers the `:latest` tag** with a broken image
-(verified 2026-08-12: a manual build pushed over `:latest` caused the exact
-`RuntimeError: No CUDA GPUs are available` failure on gfx1100 — torch's HIP init fails
-device enumeration before vLLM even reaches the pynccl `hipErrorInvalidImage` stage).
-Pull the prebuilt image instead; only rebuild via the reproducible source build below.
+1. `cp .env.example .env` and set `HF_TOKEN` (the file documents every variable
+   and its default; all others are optional).
+2. `docker compose --profile radiance-27b up -d` (or `radiance-35b` / `awq`).
+3. First boot compiles kernels for 20–30 min; the healthcheck `start_period`
+   (1800 s) accounts for it. Caches persist under `./data/`.
+4. `curl http://localhost:${VLLM_HOST_PORT:-13313}/v1/models` to verify.
 
-**Why:** the `stilldeadcode/vllm-radiance:0.5.7` base drifted to a newer Radiance source
-targeting gfx1201/RDNA4 (`_aiter_ops.py` uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py`
-moved). `docker build` of the repo therefore produces an image that dies on gfx1100 at
-pynccl init with `hipErrorInvalidImage` (`arch check FAIL 0/2 gfx1201`; the
-`patch_gfx1100.py` anchor `is_aiter_found_and_supported` matches 0x, expected 1).
+Image references live in the compose file, not in your `.env` unless you
+override them:
+
+- radiance profiles → `${RADIANCE_IMAGE:-ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100}`
+  (pulled; **never built** — the compose deliberately has no `build:` key for
+  them)
+- `awq` profile → built locally from `Dockerfile.awq`, tagged
+  `${AWQ_IMAGE:-vllm-radiance-p2p-awq:latest}` (base is the public
+  `vllm/vllm-openai-rocm:v0.24.0`, so this build is safe on gfx1100)
+
+To serve a different model on the radiance profiles, edit the `command:` block
+of the relevant service in `docker-compose.yml` (model repo id +
+`--served-model-name`); everything else in `command:` is tuned and should stay
+as-is unless you know why (see *Common Pitfalls*).
+
+## gfx1100 image status & build (updated 2026-09-04)
+
+**TL;DR:** the verified gfx1100 image is published as
+`ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100` (digest `sha256:6253c8e6cf9c...`),
+from the known-good local build `vllm-radiance:gfx1100`. **Pin that tag.**
+`:latest` currently points at the same image but is mutable and was clobbered
+once before; the `main-<sha>` tags are gfx1201-broken builds from the pre-fix
+CI. The reproducible build recipe now exists in-tree as `Dockerfile.gfx1100`
+(layering [`build/`](./build/) on the 0.5.7 stack) — but note it starts FROM
+`stilldeadcode/vllm-radiance:0.5.7`, whose wheels are gfx1201-targeted; see
+*gfx1100 build* below for what is and isn't reproducible.
+
+**⚠️ Do NOT rebuild the radiance image from a stock `Dockerfile`** — the repo
+previously carried one (`FROM stilldeadcode/vllm-radiance:0.5.7`) and it was
+**deleted** (2026-09-04) because that base drifted to gfx1201/RDNA4: building
+it and running the result on gfx1100 dies with `RuntimeError: No CUDA GPUs are
+available` (torch's HIP init fails device enumeration before vLLM even reaches
+the pynccl `hipErrorInvalidImage` stage) — and a manual build did exactly that
+on 2026-08-12, clobbering the `:latest` tag with a broken image. The compose
+file has no `build:` for the radiance profiles, so `docker compose up` cannot
+trigger a rebuild. Rebuild only via `Dockerfile.gfx1100` + `build/` (this
+repo), or the full source pipeline below.
+
+**Why the old base was wrong:** the `stilldeadcode/vllm-radiance:0.5.7` base
+drifted to a newer Radiance source targeting gfx1201/RDNA4 (`_aiter_ops.py`
+uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py` moved). A plain-layered
+image therefore dies on gfx1100 at pynccl init with `hipErrorInvalidImage`
+(`arch check FAIL 0/2 gfx1201`; the `patch_gfx1100.py` anchor
+`is_aiter_found_and_supported` matches 0x, expected 1).
 
 **The known-good gfx1100 image** (`vllm-radiance:gfx1100`, 6253c8e6cf9c) was a **full ROCm
 7.14 source build** with `ARG GFX_ARCH=gfx1100` (torch/triton/aiter 0.1.17/vllm 0.26.0 wheels
 for gfx1100) plus the recovered patch layer. Its wheels are NOT recoverable from the image.
 
-**To build for gfx1100 (reproducible source build, not yet automated):** the complete gfx1100
+**To build for gfx1100 (recipe in-tree: `Dockerfile.gfx1100`):** the complete gfx1100
 adaptation is in `build/` (patches/, radiance-modules/, aiter-configs/, moe-configs/,
 fp8-configs/, radiance_preamble.py, radiance_entrypoint.sh), recovered from the working
-image. Reconstructing the build:
+image. `Dockerfile.gfx1100` layers it on `stilldeadcode/vllm-radiance:0.5.7` and
+compiles the HIP kernels for gfx1100 — this reproduces the patch layer. Caveat: the
+0.5.7 base's own wheels have drifted to gfx1201 targets, so if the patch step anchors
+fail (`patch_gfx1100.py` reports `anchor matched 0x`), you need the full source
+pipeline instead:
 1. Start from a ROCm 7.14 multi-arch base (`GFX_ARCH=gfx1100`), NOT the drifted
    stilldeadcode 0.5.7 prebuilt.
 2. Build/install the source wheels for gfx1100: `PYTORCH_ROCM_ARCH=gfx1100
@@ -53,8 +94,9 @@ image. Reconstructing the build:
 4. Verify: `/v1/models` lists the model; log shows `P2P access : ENABLED 0↔1`; no
    hipError/InvalidImage.
 
-**Until automated:** run the pre-built `:latest` (it IS gfx1100); do not `docker build`
-from the repo and expect gfx1100.
+**Default anyway:** run the prebuilt `ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100`
+image (pin the tag, not `:latest`); a rebuild is only needed when changing the
+patch layer itself.
 
 ## Key Engineering Findings
 
@@ -103,54 +145,6 @@ find <cache> -name '*.json' -size 0 -delete
 **Reason:** Draft acceptance low on this model family
 **Note:** Community 60-95 t/s MTP numbers are llama.cpp + Q4 GGUF
 
-### Qwen3.8-27B W8A8 → AWQ-INT4 (2026-09-05/06): quant is not the single-stream lever
-
-Full write-up: `docs/qwen38-27b-quant-comparison.md`. Headlines:
-- TP2 decode step (~131 ms) is all-reduce + launch bound, not bandwidth bound.
-  Halving weight bytes (39.4→21.0 GB) moved 20.4 → 23.8–28.9 t/s (+18-25%),
-  NOT the hoped-for 2×. The 2× is real only in aggregate/batch terms
-  (~380 t/s @ batch 32) and KV pool (+80%, 163,840 tokens).
-- MTP (`qwen3_5_mtp` depth 2) survives AWQ: rep ships MTP tensors, acceptance
-  65-74%, length ~2.3 under load. `--speculative-config` model path must be
-  edited TOGETHER with `--model` (two occurrences in the compose).
-- Same-family 9B on ONE card = 80+ t/s. On gfx1100, TP is the tax; small
-  models belong on TP1, TP2 is for capacity/context, not latency.
-
-### vLLM 0.26 TP1 decode cliff at ≥5 concurrent streams (gfx1100)
-
-`docs/vllm-9b-concurrency-cliff.md` + upstream draft `docs/vllm-decode-cliff-issue.md`.
-Aggregate throughput DROPS at 5+ simultaneous decodes (197→69 t/s); step time
-plateaus ~73 ms independent of batch. Reproduced through graphs/eager,
-async/sync, prefix-cache on/off, thermal-clean, contention-free. Mitigation:
-`--max-num-seqs 4`. The TP2 sibling shows no cliff → TP1/uniproc path.
-
-### Vision enablement OOMs at boot unless mm limits AND max_pixels are capped
-
-`docs/vllm-vision-gfx1100.md`. Dummy multimodal profiling runs the ViT at the
-processor's unbounded default max size → `OutOfMemoryError: Tried to allocate
-256.00 GiB` in SDPA, silent crash-loop with NO traceback in container logs.
-Fix: `--limit-mm-per-prompt '{"image":4,"video":0}'` + `--mm-processor-kwargs
-'{"max_pixels":1003520}'`. Debug pattern for silent EngineCore loops: one-shot
-`docker run --rm -e PYTHONFAULTHANDLER=1` with output redirected to a mounted
-file.
-
-### Gateway kwargs stripping — set thinking-off SERVER-side
-
-OpenAI-proxy gateways (ContextForge-class) drop per-request
-`chat_template_kwargs` silently AND strip `reasoning` from responses.
-`--default-chat-template-kwargs '{"enable_thinking": false}'` on the server is
-the only reliable off-switch; observed cost otherwise: 50 completion tokens
-for a 4-token answer + `\n\n` residue in `content`.
-
-### Bench traps on this stack
-
-- Counting only `content` deltas against a reasoning model under-reports
-  decode 4-6× (bench read 4.4 t/s while engine generated 17.9 t/s).
-- `rocm-smi --showuse 99%` + invisible owner = another agent's live stream.
-  Check `vllm:num_requests_running` before/after any measurement.
-- `scripts/batch_curve.py` is the corrected harness (content+reasoning,
-  gate-released parallel clients).
-
 ## Deployment Patterns
 
 ### Radiance Image (27B/35B Quark)
@@ -165,7 +159,7 @@ for a 4-token answer + `\n\n` residue in `content`.
 
 ## 27B vs 35B Gotcha
 
-The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len=65537`. **Do not set 65k on 35B** — it OOMs at TP2. The 35B-A3B is a larger model; 32k is the stable ceiling. Both share identical build context, Dockerfile, env vars, and all other arguments.
+The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len=65537`. **Do not set 65k on 35B** — it OOMs at TP2. The 35B-A3B is a larger model; 32k is the stable ceiling. Both share identical image, env vars, and all other arguments.
 
 ## Common Pitfalls
 
