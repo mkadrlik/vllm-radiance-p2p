@@ -39,6 +39,18 @@ namespace py = pybind11;
 __device__ __forceinline__ void store_sys_rel(unsigned int* p, unsigned int v) {
   __hip_atomic_store(p, v, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
 }
+// Peer-directed flag post. __hip_atomic_store may lower to a PLAIN posted store
+// (the release fence, not the store, carries the ordering) — and a posted PCIe
+// write is only guaranteed on the wire after a membar, which in practice means
+// kernel exit. Window 8 on gfx1100 proved it: both ranks' spin loops timed out
+// (100s) on flags that the host DMA sampler then saw as delivered. atomicMax is
+// a true RMW: over PCIe it is non-posted and completes only once the peer
+// processed it, so a following s_waitcnt vmcnt(0) means "on the peer". Flags
+// are monotonic per block, so max == set.
+__device__ __forceinline__ void post_peer_flag(unsigned int* p, unsigned int v) {
+  atomicMax(p, v);
+  asm volatile("s_waitcnt vmcnt(0) expcnt(0)" ::: "memory");
+}
 __device__ __forceinline__ unsigned int load_sys_acq(const unsigned int* p) {
   return __hip_atomic_load(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
 }
@@ -140,16 +152,10 @@ __global__ void radiance_ar_mb(
   __syncthreads();
   if (tid == 0) {
     if (drain == 2) __threadfence_system();
-    store_sys_rel(&peer_flags[b], s);
-    // Flush the flag store ONTO THE WIRE before spinning. Peer-directed stores on
-    // RDNA3 ride the export path (same reason drain=3 uses expcnt for the data
-    // push): a bare release store can sit in the write-combining buffer while
-    // tid0 spins on the peer's mirror-image flag. If BOTH ranks buffer their flag,
-    // neither ever sees the other's post until a spin timeout + kernel-exit membar
-    // flushes it — the exact production signature (both ranks SPIN-ABORT on the
-    // same seq/blocks, flags arrive only after the timeout). vmcnt covers global
-    // atomics, expcnt covers export stores: wait for both.
-    asm volatile("s_waitcnt vmcnt(0) expcnt(0)" ::: "memory");
+    // RMW post + completion wait: guarantees the flag is on the PEER before we
+    // spin (see post_peer_flag). Window 8: a release store + vmcnt/excnt wait
+    // still only landed at kernel exit — both ranks timed out on each other.
+    post_peer_flag(&peer_flags[b], s);
     unsigned long long z = 0;
     while (load_sys_acq(&my_flags[b]) < s) {
       if (++z > spin_max) {
@@ -182,10 +188,7 @@ __global__ void radiance_ar_mb(
   // own vmcnt first; then tid0's release store + wire-flush publishes done[s].
   asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
   __syncthreads();
-  if (tid == 0) {
-    store_sys_rel(&peer_done[b], s);
-    asm volatile("s_waitcnt vmcnt(0) expcnt(0)" ::: "memory");
-  }
+  if (tid == 0) post_peer_flag(&peer_done[b], s);
 }
 
 static std::tuple<int64_t, py::bytes> alloc_shared(int64_t size, bool finegrained) {
