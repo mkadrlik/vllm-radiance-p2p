@@ -31,35 +31,32 @@ _CHUNKS_ATTR = re.compile(r'magic_chunks\s*=\s*["\']([^"\']*)["\']')
 def parse_da_xarg(extra_args: dict[str, Any] | None) -> dict | None:
     """Extract + validate the DA spec from SamplingParams.extra_args.
 
+    Wire format is flat because vllm_xargs is typed
+    dict[str, str|int|float|list[str|int|float]] — nested dicts fail pydantic
+    (verified against the served 0.26.0):
+
+        vllm_xargs = {"da_segs": [s0,e0, s1,e1, ...], "da_win": 512, "da_sink": 16}
+
     Returns {"segs": [(start,end)...], "win": int, "sink": int} or None.
     Validation is strict: a malformed spec means "not a DA request" (I1 —
     zero behavior change for every other workload).
     """
-    if not extra_args:
+    if not extra_args or "da_segs" not in extra_args:
         return None
-    da = extra_args.get("da")
-    if not isinstance(da, dict):
+    raw = extra_args.get("da_segs")
+    if not isinstance(raw, list) or len(raw) < 2 or len(raw) % 2:
         return None
-    segs = da.get("segs")
-    if not isinstance(segs, list) or not segs:
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in raw):
         return None
-    norm: list[tuple[int, int]] = []
-    for s in segs:
-        if (
-            isinstance(s, (list, tuple))
-            and len(s) == 2
-            and all(isinstance(v, int) and not isinstance(v, bool) for v in s)
-            and 0 <= s[0] < s[1]
-        ):
-            norm.append((int(s[0]), int(s[1])))
-        else:
-            return None
+    norm = [(raw[i], raw[i + 1]) for i in range(0, len(raw), 2)]
+    if any(a < 0 or a >= b for a, b in norm):
+        return None
     norm.sort()
     for (_, a1), (b0, _) in zip(norm, norm[1:]):
         if b0 < a1:
             return None  # overlapping spans: malformed spec
-    win = da.get("win", DEFAULT_WINDOW)
-    sink = da.get("sink", SINK_TOKENS)
+    win = extra_args.get("da_win", DEFAULT_WINDOW)
+    sink = extra_args.get("da_sink", SINK_TOKENS)
     if (
         not isinstance(win, int) or isinstance(win, bool)
         or not isinstance(sink, int) or isinstance(sink, bool)
