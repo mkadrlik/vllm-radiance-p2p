@@ -113,7 +113,12 @@ class DARequestState:
         self._scan_upto = 0                  # response tokens fully parsed
 
     def advance(self, tok, response_ids: list[int]) -> None:
-        """Re-scan the response tail; commit only complete tags."""
+        """Re-scan the response tail; commit only complete tags.
+
+        Async spec-decode leaves -1 placeholders in output_token_ids (later
+        corrected); decode runs of real ids only — a placeholder can never be
+        part of a tag, so splitting the decode there is safe.
+        """
         if self._answered:
             return
         n = len(response_ids)
@@ -122,7 +127,20 @@ class DARequestState:
         lo = max(0, min(self._scan_upto, n) - REDECODE_SLACK)
         if lo >= n and self._scan_upto >= n:
             return
-        text = tok.decode(response_ids[lo:], skip_special_tokens=False)
+        ids = response_ids[lo:]
+        parts: list[str] = []
+        run: list[int] = []
+        for t in ids:
+            if isinstance(t, int) and t >= 0:
+                run.append(t)
+            else:
+                if run:
+                    parts.append(tok.decode(run, skip_special_tokens=False))
+                    run = []
+                parts.append(" ")
+        if run:
+            parts.append(tok.decode(run, skip_special_tokens=False))
+        text = "".join(parts)
         watermark = self._scan_upto
         for m in _TAG_RE.finditer(text):
             self._handle(m.group(0))

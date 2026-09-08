@@ -125,6 +125,14 @@ def test_parser_semantics():
         s.advance(tok, ids)
         check(f"straddle cut={cut} recovers focus", s.mode == "focus" and mid in ("global", "focus"))
 
+    # async spec-decode -1 placeholders must not crash decode or wedge parsing
+    st8 = DARequestState(SPEC, PROMPT_LEN)
+    ids8 = tok.encode('<focus magic_chunks="3">the value')
+    st8.advance(tok, ids8[:6] + [-1, -1] + ids8[6:])
+    check("placeholders decode without crash", st8.mode == "focus")
+    st8.advance(tok, ids8[:6] + [-1, -1] + ids8[6:] + tok.encode("</focus>"))
+    check("close tag after placeholders parses", st8.mode == "global")
+
     # focus refs are per-tag (App. B): extracted values live in the response,
     # so a new focus tag REPLACES the kept set
     st7 = DARequestState(SPEC, PROMPT_LEN)
