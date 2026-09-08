@@ -74,6 +74,11 @@ def test_xarg_validation():
     r = parse_da_xarg({"da_segs": [10, 20, 0, 10]})
     assert r is not None
     check("sorts spans", r["segs"] == [(0, 10), (10, 20)])
+    check("defaults init global", r["init_mode"] == "global" and r["init_refs"] == [])
+    r = parse_da_xarg({"da_segs": [0, 10], "da_mode": 1, "da_refs": [7]})
+    check("focus init decodes", r is not None and r["init_mode"] == "focus" and r["init_refs"] == [7])
+    check("bad mode code -> None", parse_da_xarg({"da_segs": [0, 10], "da_mode": 5}) is None)
+    check("str refs -> None", parse_da_xarg({"da_segs": [0, 10], "da_refs": ["7"]}) is None)
 
 
 def test_parser_semantics():

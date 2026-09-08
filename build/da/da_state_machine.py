@@ -27,6 +27,8 @@ _TAG_RE = re.compile(
 )
 _CHUNKS_ATTR = re.compile(r'magic_chunks\s*=\s*["\']([^"\']*)["\']')
 
+_MODE_BY_CODE = {0: "global", 1: "focus", 2: "local"}
+
 
 def parse_da_xarg(extra_args: dict[str, Any] | None) -> dict | None:
     """Extract + validate the DA spec from SamplingParams.extra_args.
@@ -35,9 +37,16 @@ def parse_da_xarg(extra_args: dict[str, Any] | None) -> dict | None:
     dict[str, str|int|float|list[str|int|float]] — nested dicts fail pydantic
     (verified against the served 0.26.0):
 
-        vllm_xargs = {"da_segs": [s0,e0, s1,e1, ...], "da_win": 512, "da_sink": 16}
+        vllm_xargs = {"da_segs": [s0,e0, s1,e1, ...], "da_win": 512,
+                      "da_sink": 16, "da_mode": 1, "da_refs": [7]}
 
-    Returns {"segs": [(start,end)...], "win": int, "sink": int} or None.
+    da_mode/da_refs are OPTIONAL (default 0/empty): the initial mask state at
+    the first response token. Needed when the client prefills a DA opener as a
+    guided continuation — the server parser only sees the response, so the
+    opener's mode must be declared. 0=global 1=focus 2=local.
+
+    Returns {"segs": [(start,end)...], "win": int, "sink": int,
+             "init_mode": str, "init_refs": [int]} or None.
     Validation is strict: a malformed spec means "not a DA request" (I1 —
     zero behavior change for every other workload).
     """
@@ -63,7 +72,17 @@ def parse_da_xarg(extra_args: dict[str, Any] | None) -> dict | None:
         or win <= 0 or not 0 <= sink <= win
     ):
         return None
-    return {"segs": norm, "win": win, "sink": sink}
+    mode_code = extra_args.get("da_mode", 0)
+    refs = extra_args.get("da_refs", [])
+    if not isinstance(refs, list) or not all(
+        isinstance(v, int) and not isinstance(v, bool) for v in refs
+    ):
+        return None
+    init_mode = _MODE_BY_CODE.get(mode_code)
+    if init_mode is None:
+        return None
+    return {"segs": norm, "win": win, "sink": sink,
+            "init_mode": init_mode, "init_refs": list(refs)}
 
 
 def kept_tokens_and_blocks(spans: list[tuple[int, int]],
@@ -111,6 +130,14 @@ class DARequestState:
         self._kept_chunks: set[int] = set()  # ever validly opened (telemetry)
         self._answered = False
         self._scan_upto = 0                  # response tokens fully parsed
+        init_mode = spec.get("init_mode", "global")
+        init_refs = [k for k in spec.get("init_refs", []) if 1 <= k <= self.n_segs]
+        if init_mode == "focus" and init_refs:
+            self.mode = "focus"
+            self._active_refs = init_refs
+            self._kept_chunks.update(init_refs)
+        elif init_mode == "local":
+            self.mode = "local"
 
     def advance(self, tok, response_ids: list[int]) -> None:
         """Re-scan the response tail; commit only complete tags.
