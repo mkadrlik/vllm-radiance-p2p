@@ -21,3 +21,6 @@ Thumbs.db
 
 # python bytecode from in-tree module edits
 __pycache__/
+
+# AWQ HF cache (model weights, regenerated)
+data/awq-hf/

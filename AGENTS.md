@@ -43,18 +43,23 @@ CI. The reproducible build recipe now exists in-tree as `Dockerfile.gfx1100`
 `stilldeadcode/vllm-radiance:0.5.7`, whose wheels are gfx1201-targeted; see
 *gfx1100 build* below for what is and isn't reproducible.
 
-**⚠️ Do NOT run `docker compose build` or `docker build .`** — it rebuilds from the
-gfx1201 stilldeadcode base and **clobbers the `:latest` tag** with a broken image
-(verified 2026-08-12: a manual build pushed over `:latest` caused the exact
-`RuntimeError: No CUDA GPUs are available` failure on gfx1100 — torch's HIP init fails
-device enumeration before vLLM even reaches the pynccl `hipErrorInvalidImage` stage).
-Pull the prebuilt image instead; only rebuild via the reproducible source build below.
+**⚠️ Do NOT rebuild the radiance image from a stock `Dockerfile`** — the repo
+previously carried one (`FROM stilldeadcode/vllm-radiance:0.5.7`) and it was
+**deleted** (2026-09-04) because that base drifted to gfx1201/RDNA4: building
+it and running the result on gfx1100 dies with `RuntimeError: No CUDA GPUs are
+available` (torch's HIP init fails device enumeration before vLLM even reaches
+the pynccl `hipErrorInvalidImage` stage) — and a manual build did exactly that
+on 2026-08-12, clobbering the `:latest` tag with a broken image. The compose
+file has no `build:` for the radiance profiles, so `docker compose up` cannot
+trigger a rebuild. Rebuild only via `Dockerfile.gfx1100` + `build/` (this
+repo), or the full source pipeline below.
 
-**Why:** the `stilldeadcode/vllm-radiance:0.5.7` base drifted to a newer Radiance source
-targeting gfx1201/RDNA4 (`_aiter_ops.py` uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py`
-moved). `docker build` of the repo therefore produces an image that dies on gfx1100 at
-pynccl init with `hipErrorInvalidImage` (`arch check FAIL 0/2 gfx1201`; the
-`patch_gfx1100.py` anchor `is_aiter_found_and_supported` matches 0x, expected 1).
+**Why the old base was wrong:** the `stilldeadcode/vllm-radiance:0.5.7` base
+drifted to a newer Radiance source targeting gfx1201/RDNA4 (`_aiter_ops.py`
+uses `on_gfx12x`; `aiter/ops/triton/gemm_a8w8.py` moved). A plain-layered
+image therefore dies on gfx1100 at pynccl init with `hipErrorInvalidImage`
+(`arch check FAIL 0/2 gfx1201`; the `patch_gfx1100.py` anchor
+`is_aiter_found_and_supported` matches 0x, expected 1).
 
 **The known-good gfx1100 image** (`vllm-radiance:gfx1100`, 6253c8e6cf9c) was a **full ROCm
 7.14 source build** with `ARG GFX_ARCH=gfx1100` (torch/triton/aiter 0.1.17/vllm 0.26.0 wheels
@@ -89,8 +94,9 @@ pipeline instead:
 4. Verify: `/v1/models` lists the model; log shows `P2P access : ENABLED 0↔1`; no
    hipError/InvalidImage.
 
-**Until automated:** run the pre-built `:latest` (it IS gfx1100); do not `docker build`
-from the repo and expect gfx1100.
+**Default anyway:** run the prebuilt `ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100`
+image (pin the tag, not `:latest`); a rebuild is only needed when changing the
+patch layer itself.
 
 ## Key Engineering Findings
 
@@ -153,7 +159,7 @@ find <cache> -name '*.json' -size 0 -delete
 
 ## 27B vs 35B Gotcha
 
-The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len=65537`. **Do not set 65k on 35B** — it OOMs at TP2. The 35B-A3B is a larger model; 32k is the stable ceiling. Both share identical build context, Dockerfile, env vars, and all other arguments.
+The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len=65537`. **Do not set 65k on 35B** — it OOMs at TP2. The 35B-A3B is a larger model; 32k is the stable ceiling. Both share identical image, env vars, and all other arguments.
 
 ## Common Pitfalls
 

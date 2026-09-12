@@ -1,0 +1,19 @@
+# DA (Declarative Attention) overlay — arXiv:2609.02737 Phase 3.
+# FROM the known-good gfx1100 runtime image production runs today and adds
+# three files: the block-table mask module, its state machine, and the
+# radiance_kernels.py whose install_all() now calls it. The hook is env-gated
+# (VLLM_DA_ATTN=1) and OFF by default, so this image is behavior-identical to
+# production until a container opts in.
+#
+#   docker build -f Dockerfile.da -t vllm-radiance-gfx1100:da .
+#
+# Verify (parse + import + gate-off no-op) runs at build time.
+FROM ghcr.io/mkadrlik/vllm-radiance-p2p:gfx1100
+
+COPY build/da/da_attention.py build/da/da_state_machine.py \
+     /opt/vllm/lib/python3.12/site-packages/
+COPY build/radiance-modules/radiance_kernels.py \
+     /opt/vllm/lib/python3.12/site-packages/radiance_kernels.py
+
+RUN python -c "import ast; [ast.parse(open(f'/opt/vllm/lib/python3.12/site-packages/{m}').read()) for m in ('da_attention.py','da_state_machine.py','radiance_kernels.py')]; print('DA overlay parse OK')" \
+ && python -c "import da_attention, da_state_machine; da_attention.install_da_hook(); print('gate-off install is a no-op: OK')"

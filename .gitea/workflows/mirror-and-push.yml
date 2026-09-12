@@ -1,0 +1,201 @@
+name: Mirror to GitHub and Push to ghcr.io
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror-to-github:
+    runs-on: [self-hosted, linux, amd64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global user.name "Gitea Actions"
+          git config --global user.email "actions@gitea.local"
+
+      - name: Ensure GitHub repo exists
+        run: |
+          curl -sfL -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+            https://api.github.com/repos/mkadrlik/vllm-radiance-p2p > /dev/null 2>&1 || \
+          curl -sfL -X POST -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"name":"vllm-radiance-p2p","private":true}' \
+            https://api.github.com/user/repos > /dev/null 2>&1 || true
+
+      - name: Add GitHub remote
+        run: |
+          git remote add github https://${{ secrets.GH_TOKEN }}@github.com/mkadrlik/vllm-radiance-p2p.git
+
+      - name: Mirror to GitHub (excluding .gitea folder)
+        id: mirror
+        run: |
+          # One tree-snapshot commit on top of GitHub main, .gitea excluded.
+          # (Old approach ran git filter-branch over all history; after the
+          # 2026-09-06 history reconciliation GitHub's own merged commits are
+          # ancestors of Gitea main, and rewriting them broke the PR
+          # merge-base -> permanently "dirty" PRs. Snapshot commits are always
+          # fast-forwardable and the PR diff is exactly the content change.)
+          git fetch github main
+          git worktree remove --force /tmp/ghmirror 2>/dev/null || true
+          rm -rf /tmp/ghmirror
+          git worktree add -f --detach /tmp/ghmirror github/main
+          git -C /tmp/ghmirror rm -r --quiet --ignore-unmatch . >/dev/null || true
+          git archive HEAD | tar -x -C /tmp/ghmirror --exclude='.gitea'
+          git -C /tmp/ghmirror config user.name "Gitea Actions"
+          git -C /tmp/ghmirror config user.email "actions@gitea.local"
+          git -C /tmp/ghmirror add -A
+          if git -C /tmp/ghmirror diff --cached --quiet; then
+            echo "GitHub main already in sync; nothing to do"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          git -C /tmp/ghmirror commit -m "mirror: sync from Gitea $(git rev-parse --short HEAD)"
+          # main is branch-protected (no force-push) -> push to unprotected sync branch instead
+          SHA=$(git -C /tmp/ghmirror rev-parse HEAD)
+          git -c credential.helper=none push github ${SHA}:refs/heads/mirror-sync --force
+
+      - name: Open PR for mirror sync
+        if: steps.mirror.outputs.pushed == 'true'
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, urllib.request
+
+          token = os.environ["GH_TOKEN"]
+          api = "https://api.github.com/repos/mkadrlik/vllm-radiance-p2p"
+          req = urllib.request.Request(
+              f"{api}/pulls?state=open&head=mkadrlik:mirror-sync",
+              headers={"Authorization": f"token {token}"},
+          )
+          with urllib.request.urlopen(req) as r:
+              open_prs = json.load(r)
+          if open_prs:
+              print(f"PR already open: #{open_prs[0]['number']}; skipping")
+              raise SystemExit(0)
+
+          body = {
+              "title": "mirror: sync from Gitea",
+              "head": "mirror-sync",
+              "base": "main",
+              "body": "Automated mirror sync from the homelab Gitea repo. Sanitized (no .gitea).",
+          }
+          req = urllib.request.Request(
+              f"{api}/pulls",
+              data=json.dumps(body).encode(),
+              headers={
+                  "Authorization": f"token {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(req) as r:
+              pr = json.load(r)
+          print(f"Opened PR #{pr['number']}: {pr['html_url']}")
+          PYEOF
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  build-and-push:
+    runs-on: [self-hosted, linux, amd64]
+    needs: mirror-to-github
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git credentials
+        run: |
+          git config --global user.name "Gitea Actions"
+          git config --global user.email "actions@gitea.local"
+          git config --global url."http://${{ secrets.CR_RUNNER_TOKEN }}@192.168.50.11:3042/".insteadOf "http://192.168.50.11:3042/"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Pre-pull base image
+        run: docker pull stilldeadcode/vllm-radiance:0.5.7
+
+      - name: Generate semver tag
+        id: semver
+        run: |
+          # Generate semver from commit count since first commit
+          FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+          COMMITS=$(git rev-list --count $FIRST_COMMIT..HEAD)
+          echo "semver=v0.0.$COMMITS" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/vllm-radiance-p2p
+            nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value={{branch}}-{{sha}}
+
+      - name: Login to Gitea Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: nas.kadrlik.home:3042
+          username: mkadrlik
+          password: ${{ secrets.CR_RUNNER_TOKEN }}
+          insecure: true
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+
+  copy-to-ghcr:
+    runs-on: [self-hosted, linux, amd64]
+    needs: build-and-push
+    if: github.event_name == 'workflow_dispatch' && needs.build-and-push.result == 'success'
+    steps:
+      - name: Login to registries
+        uses: docker/login-action@v3
+        with:
+          registry: nas.kadrlik.home:3042
+          username: mkadrlik
+          password: ${{ secrets.CR_RUNNER_TOKEN }}
+          insecure: true
+      - name: Login to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Copy latest to ghcr.io
+        run: |
+          docker pull nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest
+          docker tag nas.kadrlik.home:3042/mkadrlik/vllm-radiance-p2p:latest ghcr.io/mkadrlik/vllm-radiance-p2p:latest
+          docker push ghcr.io/mkadrlik/vllm-radiance-p2p:latest

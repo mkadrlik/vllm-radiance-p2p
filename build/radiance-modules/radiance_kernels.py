@@ -189,6 +189,11 @@ def install_all():
         radiance_vit_attn.install()              # RADIANCE_VIT_FLASH (default on, gfx12x)
     except Exception as e:
         sys.stderr.write(f"[radiance] radiance_vit_attn install failed: {e!r}\n")
+    try:
+        import da_attention
+        da_attention.install_da_hook()           # VLLM_DA_ATTN (default off)
+    except Exception as e:
+        sys.stderr.write(f"[radiance] da_attention install failed: {e!r}\n")
 
 
 def block_scaled_mm(kernel, A, B, As, Bs):
