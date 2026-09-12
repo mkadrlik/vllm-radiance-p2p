@@ -13,7 +13,13 @@ at capture), and scratch is double-buffered by seq parity. Multi-block: each blo
 chunk and drives its own flag handshake, spreading the push across CUs (PCIe) and the reduce across CUs.
 
 Env:
-  RADIANCE_FAST_REDUCE (1)     1 = install the kernel on the TP group, 0 = RCCL
+  RADIANCE_FAST_REDUCE (0)     1 = install the kernel on the TP group, 0 = RCCL
+                             DEFAULT OFF since 2026-09-05: the capture gate fixed
+                             the startup deadlock but the kernel still wedges on
+                             first decode replay in production (see
+                             docs/fast-reduce-mtp-deadlock.md "Serving-time
+                             regression"). Do not enable until the replay-time
+                             handshake is proven on the real model.
   RADIANCE_AR_MAX_KB (32768)   messages up to this size use the kernel; larger fall back to RCCL
   RADIANCE_AR_QUANT (1)        1 = quantize the payload to block-scaled fp8 (e4m3) for large messages
   RADIANCE_AR_QUANT_MIN_KB (128) fp8 only for messages >= this size (smaller stay on the bf16 kernel)
@@ -86,8 +92,14 @@ class RadianceAllreduce:
             peer = 1 - self.rank
             self._peer_scratch = ext.open_shared(sc_handles[peer])
             self._peer_flags = ext.open_shared(fl_handles[peer])
-            # per-BLOCK device-resident seq counters (kernel increments -> replay-safe;
-            # both ranks run identical graph sequences so seq_ctr[b] stays in lockstep)
+            # per-BLOCK device-resident seq counters (kernel increments -> replay-safe).
+            # INVARIANT (enforced by the capture gate in should_custom_ar): the kernel
+            # ONLY ever executes from graph REPLAY of vLLM-captured CUDA graphs. Eager
+            # launches (which are where rank-divergent calls happen: dynamo/inductor
+            # rank-local state, warmups, profiling) are gated to RCCL, and captured
+            # kernels do not execute at capture time. vLLM's graph dispatch is driven
+            # by the broadcast scheduler output, so both ranks replay the identical
+            # graph sequence and seq_ctr[b] stays in lockstep.
             self._seq = torch.zeros(maxb, dtype=torch.int32, device=self.device)
         except Exception as e:
             _log(f"custom AR disabled: IPC setup failed ({e!r})")
@@ -133,6 +145,22 @@ class RadianceAllreduce:
 
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
         if self.disabled:
+            return False
+        # FAST-REDUCE ONLY INSIDE CUDA-GRAPH CAPTURE. An eager launch here is a
+        # fire-and-forget spin kernel: if the ranks ever disagree on the eager
+        # all_reduce sequence (dynamo recompile asymmetry, rank-0-only work,
+        # profile runs), the peer's kernel spins on my_flags[b] < seq for
+        # ~4000s (RADIANCE_SPIN_MAX uncached PCIe reads) and the next device-wide
+        # sync — which torch.cuda.graph() capture_begin performs — wedges that
+        # rank forever. That is the MTP drafter capture deadlock: hang at
+        # "Capturing CUDA graphs 0/5", both ranks watchdog on the next NCCL
+        # collective. Captured kernels do not execute at capture time, so they
+        # cannot spin during capture, and at replay both ranks execute the
+        # identical scheduler-driven graph sequence, which is exactly the SPMD
+        # lockstep assumption the per-block device-resident seq counters need.
+        # Eager all_reduces (warmup, profiling, >max-capture prefill batches)
+        # fall through to RCCL: symmetric and deadlock-free.
+        if not torch.cuda.is_current_stream_capturing():
             return False
         if inp.dtype not in _DTYPE_CODE:
             return False
@@ -210,7 +238,7 @@ def install_custom_ar():
     else falls through to RCCL. We wrap rather than replace ca_comm because vLLM's RocmAiter fusion
     pass asserts isinstance(ca_comm, CustomAllreduce), and ca_comm is already inert on ROCm. Env-gated
     by RADIANCE_FAST_REDUCE, idempotent."""
-    if os.environ.get("RADIANCE_FAST_REDUCE", "1") != "1":
+    if os.environ.get("RADIANCE_FAST_REDUCE", "0") != "1":
         return
     from vllm.distributed.device_communicators.cuda_communicator import CudaCommunicator
 

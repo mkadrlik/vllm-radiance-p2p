@@ -74,6 +74,7 @@ def _batch_ceil(num_reqs):
 # ----- drafter hooks: per-slot confidence capture + A/B/C decision ------------
 def _install_drafter_hooks():
     import torch
+    import torch.distributed as dist
     from vllm.v1.spec_decode.llm_base_proposer import SpecDecodeBaseProposer
     if getattr(SpecDecodeBaseProposer, "_radiance_wrapped", False):
         return
