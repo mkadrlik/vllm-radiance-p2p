@@ -2,7 +2,7 @@
 
 Date: 2026-09-05 · Task: t_9567234e · Branch: `fix/fast-reduce-mtp-capture`
 
-## Symptom (big-chungus, gfx1100 TP=2, Qwen3.8-27B W8A8, MTP=2, FULL_AND_PIECEWISE)
+## Symptom (rocm-host, gfx1100 TP=2, Qwen3.8-27B W8A8, MTP=2, FULL_AND_PIECEWISE)
 
 - `RADIANCE_FAST_REDUCE=0`: boots healthy, graphs capture 5/5 + 6/6, 20.4 tok/s.
 - `RADIANCE_FAST_REDUCE=1`: `[radiance] custom all-reduce INSTALLED (rank=0/1 ...)` then hang at

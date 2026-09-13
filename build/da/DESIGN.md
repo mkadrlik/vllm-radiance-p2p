@@ -2,7 +2,7 @@
 
 Paper: arXiv:2609.02737 App. B. Client-side protocol already shipped in Hermes
 (`plugins/context_engine/declarative_attention/`, P0/P1 evidence in
-`/home/hermes-bot/da-eval/`). This is the serving-side mask: the whole mechanism
+`~/da-eval/`). This is the serving-side mask: the whole mechanism
 (P1 without it is DA-nm, which the paper shows costs *more*).
 
 ## Why compaction is position-safe (the load-bearing fact)
