@@ -3,10 +3,10 @@
 # V0 capture-gate files (fast path now default-OFF). The instrumented build
 # (RADIANCE_AR_DIAG sampler, device spin-abort log, RADIANCE_AR_SPIN_MAX knob,
 # py-spy) lives in git history at commits 0d3bba9..57cefe1; the built image
-# vllm-radiance-gfx1100:fix-ar-diag on big-chungus carries it. Rebuild from
+# vllm-radiance-gfx1100:fix-ar-diag on rocm-host carries it. Rebuild from
 # those commits to reproduce the wedge instrumentation.
 #
-#   sudo -n -u mkadrlik docker build -f Dockerfile.fix-ar-diag -t vllm-radiance-gfx1100:fix-ar-diag .
+#   sudo -u "$USER" docker build -f Dockerfile.fix-ar-diag -t vllm-radiance-gfx1100:fix-ar-diag .
 FROM vllm-radiance-gfx1100:fix-ar
 
 COPY build/patches/radiance_ar_ext.hip /opt/patches/radiance_ar_ext.hip

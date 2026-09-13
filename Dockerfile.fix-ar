@@ -3,7 +3,7 @@
 # swaps in the capture-gated radiance_allreduce.py. Nothing else changes, so the
 # A/B against production is exactly the one-file fix.
 #
-#   sudo -n -u mkadrlik docker build -f Dockerfile.fix-ar -t vllm-radiance-gfx1100:fix-ar .
+#   sudo -u "$USER" docker build -f Dockerfile.fix-ar -t vllm-radiance-gfx1100:fix-ar .
 #
 # (Full source build via Dockerfile.gfx1100 is currently blocked by the upstream
 # stilldeadcode:0.5.7 base drift to gfx1201 — patch_gfx1100 anchor matches 0x.

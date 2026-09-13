@@ -290,7 +290,7 @@ services:
     ports:
       - "13305:13305"
     environment:
-      TZ: America/Chicago
+      TZ: UTC
       HSA_OVERRIDE_GFX_VERSION: "11.0.0"
       HSA_SIGNAL_TIMEOUT: "-1"
       ROCR_VISIBLE_DEVICES: "${QWEN38_27B_ROCR:-1,2}"
@@ -407,7 +407,7 @@ services:
     ports:
       - "13318:13318"
     environment:
-      TZ: America/Chicago
+      TZ: UTC
       HSA_OVERRIDE_GFX_VERSION: "11.0.0"
       HSA_SIGNAL_TIMEOUT: "-1"
       ROCR_VISIBLE_DEVICES: "${ORNITH_9B_ROCR:-0}"

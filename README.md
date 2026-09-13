@@ -21,7 +21,7 @@ model on a single GPU. No CUDA, no NVIDIA.
 | `radiance-35b` | Qwen3.6-35B-A3B-Quark | 2× RX 7900 XTX (TP2) | 13313 | Quark W8A8 | legacy |
 | `awq` | Any AWQ model (configurable) | 1 GPU | 13309 | AWQ | generic template |
 
-The two production profiles mirror the live big-chungus deployment
+The two production profiles mirror the live rocm-host deployment
 (`docker/vllm-rocm-main/docker-compose-{27b,9b}.yml`) — same flags, same env.
 Findings that shaped them:
 
