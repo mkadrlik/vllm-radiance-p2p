@@ -169,6 +169,23 @@ The 35B-A3B profile uses `--max-model-len=32768` while 27B uses `--max-model-len
 4. **ViT 128 GiB OOM** — always use `--language-model-only` for text-only models
 5. **GPU scheduler contention** — `GPU_MAX_HW_QUEUES=1` required for gfx1100
 
+## Segfault / crash triage
+
+Symptom signature (grep in `docker compose logs` / `docker inspect`) → cause → fix.
+Full writeup with verification commands: [docs/troubleshooting-segfaults.md](./docs/troubleshooting-segfaults.md).
+
+| Log/exit signature | Cause | Fix |
+|---|---|---|
+| `hipErrorInvalidImage` / `No CUDA GPUs are available` / `device kernel image is invalid` at startup | Non-gfx1100 host (RDNA4/MI300/NVIDIA) — image is `PYTORCH_ROCM_ARCH=gfx1100` only | Confirm with `rocminfo` / `lspci -d 1002:`; needs an arch-specific build |
+| `NCCL Init COMPLETE` then `HIP failure: the operation cannot be performed in the present state` / `pfn_hsa_system_get_info 4107` on first all_reduce | Stock ROCm 7.2.x RCCL is broken for gfx1100 TP>1 (ROCm #6074, bad amdclang code objects). Image ships the fix (RCCL 2.27.7 from 7.1.1 + `ncclCommDump` stub + jemalloc `LD_PRELOAD` in entrypoint) | Never swap `librccl` or rebuild on a newer ROCm base — that reintroduces the crash |
+| Segfault/OOM on the "wrong" card, or TP2 silently TP1, multi-GPU host | `ROCR_VISIBLE_DEVICES` index ≠ KFD node index in `rocminfo` | Pin GPUs by BDF/UUID, not positional index; verify with `rocm-smi --showpids` |
+| Exit code 137, no traceback, dies during `profile_run` | Multimodal Qwen ViT dummy tensor ~128 GiB → kernel OOM-kill | Add `--language-model-only` (required for text-only serving) |
+| `JSONDecodeError: Expecting value: line 1 column 1` on every boot, crash-loop | Boot killed mid-autotune left 0-byte `*.json` in Triton/inductor cache; each boot recreates more | `find /root/.triton /tmp/torchinductor_root $TRITON_CACHE_DIR -name '*.json' -size 0 -delete`; prevention: never kill a boot mid-compile, separate cache dir per rank |
+| Hangs at `Capturing CUDA graphs 0/5`, then 600s watchdog timeout on `_ALLGATHER_BASE` both ranks | `RADIANCE_FAST_REDUCE=1` + MTP drafter + CUDA graphs = capture-symmetry deadlock | `RADIANCE_FAST_REDUCE=0` with a drafter. `RADIANCE_RUN_BWTEST=1` can wedge the SMU and hard-reboot the host — keep it 0 |
+| Boots fine, ~2x slow; log lacks `Selected AiterInt8ScaledMMLinearKernel` | `VLLM_ROCM_USE_AITER=1` unset → tuned int8 kernels silently never load | Set the env var; that log line is the proof-of-engagement |
+| `error: unrecognized arguments: python3` instant death | Image ENTRYPOINT execs `vllm serve "$@"`; compose `command:` must be **flags only**, not `python3 -m vllm.entrypoints.openai.api_server ...` | Rewrite `command:` as flags (`--model` or first positional) |
+| `ValueError` about requested memory at startup | Another process holds the VRAM (co-resident model), not a bug | `rocm-smi --showmeminfo vram` + `rocm-smi --showpids`, kill the hog |
+
 ## Performance Baselines
 
 | Config | Decode | Notes |
