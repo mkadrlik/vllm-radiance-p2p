@@ -226,4 +226,5 @@ run small models TP1 (9B = 4× the 27B's decode), reserve TP2 for capacity.
 | 35B OOM at load | Context too long | keep `VLLM_35B_MAX_MODEL_LEN=32768` |
 | 401 / model not found on first boot | HF license not accepted | accept terms on the model page, set `HF_TOKEN` |
 
+Startup segfaults/crashes in particular: [docs/troubleshooting-segfaults.md](docs/troubleshooting-segfaults.md).
 More detail in [AGENTS.md](./AGENTS.md).
